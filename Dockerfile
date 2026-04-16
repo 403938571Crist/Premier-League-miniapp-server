@@ -21,5 +21,8 @@ COPY --from=builder /app/target/*.jar app.jar
 # 云托管会通过环境变量注入端口，这里暴露 8080
 EXPOSE 8080
 
-# 启动服务（带容器感知优化）
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-Djava.security.egd=file:/dev/./urandom", "-jar", "app.jar"]
+# JVM 容器优化参数（可在 CloudBase Run 环境变量中覆盖 JAVA_OPTS）
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/./urandom"
+
+# 明确的启动命令：先展开 JAVA_OPTS，再执行 java -jar
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]
