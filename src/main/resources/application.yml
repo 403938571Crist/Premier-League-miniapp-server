@@ -45,7 +45,7 @@ spring:
 football-data:
   api:
     base-url: https://api.football-data.org/v4
-    token: ${FOOTBALL_DATA_TOKEN:80e317eb06654d0e808e6b2021b19192}  # 从环境变量读取，默认使用小程序配置的 key
+    token: ${FOOTBALL_DATA_TOKEN:}  # 从环境变量读取，生产环境必须配置
     competition-code: PL  # 英超
   cache:
     enabled: true
