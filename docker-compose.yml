@@ -1,0 +1,23 @@
+# 本地 Docker 验证用
+# 用法: docker-compose up --build
+version: '3.8'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DB_URL=jdbc:mysql://host.docker.internal:3306/premierleague?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      - DB_USERNAME=root
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - FOOTBALL_DATA_TOKEN=${FOOTBALL_DATA_TOKEN:-}
+      - X_BEARER_TOKEN=${X_BEARER_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

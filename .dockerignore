@@ -5,3 +5,4 @@ target/
 scripts/
 install-dependencies.ps1
 LICENSE
+docker-compose.yml
