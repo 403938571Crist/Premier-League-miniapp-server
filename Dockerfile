@@ -11,7 +11,8 @@ COPY src ./src
 RUN mvn clean package -DskipTests
 
 # =================== 运行阶段 ===================
-FROM eclipse-temurin:17-jdk
+# 使用 JRE 而非 JDK，显著减小生产镜像体积
+FROM eclipse-temurin:17-jre
 WORKDIR /app
 
 # 从编译阶段复制 jar 包
