@@ -1,8 +1,29 @@
+# 构建产物
 target/
+*.jar.original
+
+# 版本控制
 .git/
 .gitignore
+
+# 文档
 *.md
+
+# 本地脚本和临时文件
 scripts/
 install-dependencies.ps1
-LICENSE
+*.log
+*.tmp
+
+# 开发环境配置
+.idea/
+*.iml
+.vscode/
+.env
+.env.*
+
+# 本地验证文件
 docker-compose.yml
+
+# 许可文件（不需要打进运行镜像）
+LICENSE
