@@ -20,5 +20,5 @@ COPY --from=builder /app/target/*.jar app.jar
 # 云托管会通过环境变量注入端口，这里暴露 8080
 EXPOSE 8080
 
-# 启动服务
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# 启动服务（带容器感知优化）
+ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-Djava.security.egd=file:/dev/./urandom", "-jar", "app.jar"]
