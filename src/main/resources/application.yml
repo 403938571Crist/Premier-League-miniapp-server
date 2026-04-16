@@ -1,0 +1,119 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: premier-league-news-aggregator
+
+  # MySQL 配置
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/premierleague?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      connection-timeout: 20000
+
+  # JPA 配置
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+
+  # Redis 配置
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
+      timeout: ${REDIS_TIMEOUT:2000ms}
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: -1ms
+
+  # 缓存配置
+  cache:
+    type: redis
+    redis:
+      time-to-live: 300000  # 默认5分钟
+      cache-null-values: false
+
+# 自定义缓存配置（在RedisConfig.java中实现）
+# - standings: 5分钟
+# - teams: 1小时
+# - matches: 1分钟（实时比分）
+# - matchDetail: 30分钟
+# - teamSquad: 1小时
+
+# Football-Data.org API 配置
+# 免费版限制：10 请求/分钟
+# 申请 API Token: https://www.football-data.org/
+football-data:
+  api:
+    base-url: https://api.football-data.org/v4
+    token: ${FOOTBALL_DATA_TOKEN:80e317eb06654d0e808e6b2021b19192}  # 从环境变量读取，默认使用小程序配置的 key
+    competition-code: PL  # 英超
+  cache:
+    enabled: true
+  sync:
+    enabled: true
+    standings:
+      interval: 300000      # 5 分钟
+    teams:
+      interval: 43200000    # 12 小时
+    squad:
+      interval: 21600000    # 6 小时
+
+# 抓取源配置
+app:
+  cors:
+    allowed-origins:
+      - "*"
+  
+  # X (Twitter) API 配置
+  x:
+    bearer-token: ${X_BEARER_TOKEN:}  # 从环境变量读取
+  
+  fetch:
+    # 高频源：每2分钟抓取
+    high-frequency:
+      sources:
+        - romano
+      interval-minutes: 2
+      max-items-per-fetch: 100
+    
+    # 中频源：每10分钟抓取
+    medium-frequency:
+      sources:
+        - dongqiudi
+        - official
+      interval-minutes: 10
+      max-items-per-fetch: 50
+    
+    # 低频源：每30分钟抓取（预留扩展位）
+    low-frequency:
+      sources: []
+      # 预留扩展源：
+      # - bilibili  (需API认证，待评估)
+      # - douyin    (需官方API，待评估)
+      interval-minutes: 30
+      max-items-per-fetch: 30
+
+# 日志配置
+logging:
+  level:
+    com.premierleague.server: INFO
+    org.springframework.cache: DEBUG
+    org.hibernate.SQL: DEBUG
