@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
  * 
  * 【重要】首页资讯流统一走服务端缓存结果，不实时硬抓
  * - 数据由定时任务抓取到 MySQL
- * - 查询时从 MySQL 读取，走 Redis 缓存
+ * - 查询时从 MySQL 读取，走 Caffeine 本地缓存
  * - 数据库为空时返回空结果（无 Mock 数据）
  */
 @Slf4j
@@ -65,7 +65,7 @@ public class NewsService {
         } else if (tag != null && !tag.isEmpty()) {
             newsPage = newsRepository.findByTag(tag, pageable);
         } else {
-            newsPage = newsRepository.findAllByOrderByHotScoreDesc(pageable);
+            newsPage = newsRepository.findAllByOrderByHotScoreDescThenTimeDesc(pageable);
         }
         
         List<NewsListItem> items = newsPage.getContent().stream()

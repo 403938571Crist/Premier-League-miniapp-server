@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * 球员社媒服务 - 支持 MySQL + Redis 缓存
+ * 球员社媒服务 - 支持 MySQL + Caffeine 本地缓存
  */
 @Slf4j
 @Service
