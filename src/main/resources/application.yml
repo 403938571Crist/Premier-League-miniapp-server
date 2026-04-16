@@ -12,8 +12,8 @@ spring:
     password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      minimum-idle: 5
-      maximum-pool-size: 20
+      minimum-idle: 2
+      maximum-pool-size: 10
       idle-timeout: 300000
       max-lifetime: 1200000
       connection-timeout: 20000
@@ -96,9 +96,9 @@ app:
       interval-minutes: 30
       max-items-per-fetch: 30
 
-# 日志配置
+# 日志配置（生产环境保持简洁，减少 CloudBase Run 日志开销）
 logging:
   level:
+    root: WARN
     com.premierleague.server: INFO
-    org.springframework.cache: DEBUG
-    org.hibernate.SQL: DEBUG
+    org.springframework.web: INFO
