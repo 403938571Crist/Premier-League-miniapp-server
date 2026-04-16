@@ -1,6 +1,12 @@
 server:
   port: ${PORT:8080}
   address: 0.0.0.0
+  # 优雅停机：容器收到 SIGTERM 后，等待活跃请求完成再退出
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: 50
+    accept-count: 50
 
 spring:
   application:
@@ -96,6 +102,18 @@ app:
       # - douyin    (需官方API，待评估)
       interval-minutes: 30
       max-items-per-fetch: 30
+
+# Actuator 配置（暴露健康检查和信息端点，供 CloudBase Run 探针使用）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
 
 # 日志配置（生产环境保持简洁，减少 CloudBase Run 日志开销）
 logging:
