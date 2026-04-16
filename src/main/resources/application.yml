@@ -28,29 +28,11 @@ spring:
         dialect: org.hibernate.dialect.MySQL8Dialect
         format_sql: true
 
-  # Redis 配置
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
-      database: ${REDIS_DATABASE:0}
-      timeout: ${REDIS_TIMEOUT:2000ms}
-      lettuce:
-        pool:
-          max-active: 8
-          max-idle: 8
-          min-idle: 0
-          max-wait: -1ms
-
-  # 缓存配置
+  # 缓存配置（使用 Caffeine 本地缓存，无需 Redis）
   cache:
-    type: redis
-    redis:
-      time-to-live: 300000  # 默认5分钟
-      cache-null-values: false
+    type: simple
 
-# 自定义缓存配置（在RedisConfig.java中实现）
+# 自定义缓存配置（在 CacheConfig.java 中实现）
 # - standings: 5分钟
 # - teams: 1小时
 # - matches: 1分钟（实时比分）
@@ -99,12 +81,15 @@ app:
       sources:
         - dongqiudi
         - official
+        - sky
+        - guardian
       interval-minutes: 10
       max-items-per-fetch: 50
-    
-    # 低频源：每30分钟抓取（预留扩展位）
+
+    # 低频源：每30分钟抓取
     low-frequency:
-      sources: []
+      sources:
+        - reddit
       # 预留扩展源：
       # - bilibili  (需API认证，待评估)
       # - douyin    (需官方API，待评估)

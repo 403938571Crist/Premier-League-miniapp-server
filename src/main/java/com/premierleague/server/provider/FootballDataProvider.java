@@ -8,7 +8,7 @@ import com.premierleague.server.entity.Team;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.cache.CacheManager;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
@@ -22,7 +22,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
+
 
 /**
  * Football-Data.org API 数据提供者
@@ -35,7 +35,7 @@ public class FootballDataProvider {
 
     private final WebClient.Builder webClientBuilder;
     private final ObjectMapper objectMapper;
-    private final RedisTemplate<String, String> redisTemplate;
+    private final CacheManager cacheManager;
 
     @Value("${football-data.api.base-url:https://api.football-data.org/v4}")
     private String baseUrl;
@@ -76,28 +76,52 @@ public class FootballDataProvider {
     }
 
     /**
-     * 从缓存获取数据
+     * 从缓存获取数据（Caffeine 本地缓存）
      */
     private String getFromCache(String cacheKey) {
         if (!cacheEnabled) return null;
         try {
-            return redisTemplate.opsForValue().get(cacheKey);
+            String cacheName = resolveCacheName(cacheKey);
+            org.springframework.cache.Cache cache = cacheManager.getCache(cacheName);
+            if (cache == null) return null;
+            org.springframework.cache.Cache.ValueWrapper wrapper = cache.get(cacheKey);
+            return wrapper != null ? (String) wrapper.get() : null;
         } catch (Exception e) {
-            log.warn("[FootballDataProvider] Redis cache get failed: {}", e.getMessage());
+            log.warn("[FootballDataProvider] Cache get failed: {}", e.getMessage());
             return null;
         }
     }
 
     /**
-     * 保存数据到缓存
+     * 保存数据到缓存（Caffeine 本地缓存）
+     * TTL 由 cacheName 在 CacheConfig 中统一配置
      */
-    private void saveToCache(String cacheKey, String data, long ttlSeconds) {
+    private void saveToCache(String cacheKey, String data) {
         if (!cacheEnabled) return;
         try {
-            redisTemplate.opsForValue().set(cacheKey, data, ttlSeconds, TimeUnit.SECONDS);
+            String cacheName = resolveCacheName(cacheKey);
+            org.springframework.cache.Cache cache = cacheManager.getCache(cacheName);
+            if (cache != null) cache.put(cacheKey, data);
         } catch (Exception e) {
-            log.warn("[FootballDataProvider] Redis cache save failed: {}", e.getMessage());
+            log.warn("[FootballDataProvider] Cache save failed: {}", e.getMessage());
         }
+    }
+
+    /**
+     * 根据 cacheKey 前缀映射到对应的缓存名称
+     */
+    private String resolveCacheName(String cacheKey) {
+        if (cacheKey.startsWith("fd:matches:date:")) return "fdMatchesDate";
+        if (cacheKey.startsWith("fd:matches:matchday:")) return "fdMatchesMatchday";
+        if (cacheKey.startsWith("fd:match:detail:")) return "fdMatchDetail";
+        if (cacheKey.startsWith("fd:team:") && cacheKey.contains(":matches:")) return "fdTeamMatches";
+        if (cacheKey.startsWith("fd:standings:")) return "fdStandings";
+        if (cacheKey.startsWith("fd:team:detail:")) return "fdTeamDetail";
+        if (cacheKey.startsWith("fd:team:squad:")) return "fdTeamSquad";
+        if (cacheKey.startsWith("fd:player:detail:")) return "fdPlayerDetail";
+        if (cacheKey.startsWith("fd:player:") && cacheKey.contains(":matches:")) return "fdPlayerMatches";
+        if (cacheKey.startsWith("fd:rate_limit")) return "fdRateLimit";
+        return "fdMatchesDate";
     }
 
     /**
@@ -143,7 +167,7 @@ public class FootballDataProvider {
                 .timestamp(LocalDateTime.now())
                 .build();
             
-            saveToCache("fd:rate_limit", objectMapper.writeValueAsString(info), 60);
+            saveToCache("fd:rate_limit", objectMapper.writeValueAsString(info));
         } catch (Exception e) {
             log.warn("Failed to update rate limit info: {}", e.getMessage());
         }
@@ -187,7 +211,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 60 秒（今日赛程实时性高）
-            saveToCache(cacheKey, response, 60);
+            saveToCache(cacheKey, response);
             
             return parseMatchesFromJson(response);
         } catch (WebClientResponseException e) {
@@ -233,7 +257,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 5 分钟
-            saveToCache(cacheKey, response, 300);
+            saveToCache(cacheKey, response);
             
             return parseMatchesFromJson(response);
         } catch (WebClientResponseException e) {
@@ -276,7 +300,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 60-120 秒
-            saveToCache(cacheKey, response, 90);
+            saveToCache(cacheKey, response);
             
             return Optional.ofNullable(parseMatchFromJson(response));
         } catch (WebClientResponseException e) {
@@ -322,7 +346,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 6 小时
-            saveToCache(cacheKey, response, 21600);
+            saveToCache(cacheKey, response);
             
             return parseMatchesFromJson(response);
         } catch (Exception e) {
@@ -366,7 +390,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 5 分钟
-            saveToCache(cacheKey, response, 300);
+            saveToCache(cacheKey, response);
             
             return parseStandingsFromJson(response);
         } catch (WebClientResponseException e) {
@@ -411,7 +435,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 6 小时
-            saveToCache(cacheKey, response, 21600);
+            saveToCache(cacheKey, response);
             
             return Optional.ofNullable(parseTeamFromJson(response));
         } catch (WebClientResponseException e) {
@@ -454,7 +478,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 6 小时
-            saveToCache(cacheKey, response, 21600);
+            saveToCache(cacheKey, response);
             
             return parseSquadFromJson(response);
         } catch (WebClientResponseException e) {
@@ -499,7 +523,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 12 小时
-            saveToCache(cacheKey, response, 43200);
+            saveToCache(cacheKey, response);
             
             return Optional.ofNullable(parsePlayerFromJson(response));
         } catch (WebClientResponseException e) {
@@ -541,7 +565,7 @@ public class FootballDataProvider {
                 .getBody();
 
             // 缓存 1 小时
-            saveToCache(cacheKey, response, 3600);
+            saveToCache(cacheKey, response);
             
             return parseMatchesFromJson(response);
         } catch (Exception e) {
