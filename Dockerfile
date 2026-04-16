@@ -23,6 +23,7 @@ EXPOSE 8080
 
 # JVM 容器优化参数（可在 CloudBase Run 环境变量中覆盖 JAVA_OPTS）
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/./urandom -Duser.timezone=Asia/Shanghai"
+ENV SPRING_PROFILES_ACTIVE=prod
 
 # 明确的启动命令：先展开 JAVA_OPTS，再执行 java -jar
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

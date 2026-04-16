@@ -1,0 +1,23 @@
+# ============================================
+# 生产环境专属配置 (CloudBase Run)
+# 激活方式: 设置环境变量 SPRING_PROFILES_ACTIVE=prod
+# ============================================
+
+spring:
+  jpa:
+    hibernate:
+      # 生产环境禁止自动修改表结构，仅做校验
+      ddl-auto: validate
+    show-sql: false
+
+  # 生产缓存保持本地 Caffeine
+  cache:
+    type: simple
+
+# 日志配置（生产环境保持简洁，减少 CloudBase Run 日志开销）
+logging:
+  level:
+    root: WARN
+    com.premierleague.server: INFO
+    org.springframework.web: INFO
+    org.hibernate.SQL: WARN

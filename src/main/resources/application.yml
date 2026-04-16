@@ -115,9 +115,10 @@ management:
         enabled: true
       show-details: always
 
-# 日志配置（生产环境保持简洁，减少 CloudBase Run 日志开销）
+# 日志配置（开发环境默认值，生产环境由 application-prod.yml 覆盖为 WARN）
 logging:
   level:
-    root: WARN
-    com.premierleague.server: INFO
+    root: INFO
+    com.premierleague.server: DEBUG
     org.springframework.web: INFO
+    org.hibernate.SQL: DEBUG
