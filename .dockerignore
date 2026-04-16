@@ -25,5 +25,9 @@ install-dependencies.ps1
 # 本地验证文件
 docker-compose.yml
 
+# 环境变量模板（不应进入镜像）
+.env
+.env.example
+
 # 许可文件（不需要打进运行镜像）
 LICENSE
