@@ -7,6 +7,10 @@ import com.premierleague.server.service.ContentCleanService;
 import com.premierleague.server.util.HttpClientUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -79,10 +83,13 @@ public class DongqiudiProvider implements NewsProvider {
                     break;
                 }
                 
-                // 验证返回的是否是英超内容
+                // 记录响应结构便于调试
                 JsonNode root = objectMapper.readTree(response);
-                String label = root.path("label").asText("");
-                log.debug("[Dongqiudi] Tab label: {}", label);
+                String label = root.path("label").asText("(no label)");
+                // 打印顶层字段名，方便定位 articles 字段叫什么
+                StringBuilder keys = new StringBuilder();
+                root.fieldNames().forEachRemaining(k -> keys.append(k).append(","));
+                log.info("[Dongqiudi] Tab={} label={} topKeys=[{}]", premierLeagueTabId, label, keys);
                 
                 List<News> pageNews = parseResponse(root);
                 
@@ -90,7 +97,21 @@ public class DongqiudiProvider implements NewsProvider {
                 List<News> plNews = pageNews.stream()
                     .filter(this::isPremierLeagueRelated)
                     .toList();
-                
+
+                // 补抓正文（只对通过过滤的文章）
+                for (News news : plNews) {
+                    try {
+                        String articleId = news.getId().replace("dqd-", "");
+                        String content = fetchArticleContent(articleId);
+                        if (content != null && !content.isEmpty()) {
+                            news.setContent(content);
+                        }
+                        Thread.sleep(300);
+                    } catch (Exception e) {
+                        log.warn("[Dongqiudi] Failed to fetch content for {}", news.getId());
+                    }
+                }
+
                 allNews.addAll(plNews);
                 
                 log.info("[Dongqiudi] Page {} parsed {} items, {} PL related", 
@@ -114,26 +135,52 @@ public class DongqiudiProvider implements NewsProvider {
     
     /**
      * 解析列表响应
+     * 懂球帝不同版本/接口的列表字段名不固定，按优先级依次尝试
      */
     private List<News> parseResponse(JsonNode root) {
         List<News> newsList = new ArrayList<>();
-        
+
         try {
-            JsonNode articles = root.path("articles");
-            
-            if (articles.isArray()) {
-                for (JsonNode article : articles) {
-                    News news = parseArticle(article);
-                    if (news != null) {
-                        newsList.add(news);
-                    }
+            // 尝试多个可能的列表字段名
+            JsonNode articles = findArticlesNode(root);
+
+            if (articles == null || !articles.isArray()) {
+                log.warn("[Dongqiudi] No articles node found. Response keys: {}",
+                        root.fieldNames().hasNext() ? root.fieldNames().next() : "(empty)");
+                return newsList;
+            }
+
+            log.debug("[Dongqiudi] Found {} raw articles", articles.size());
+            for (JsonNode article : articles) {
+                News news = parseArticle(article);
+                if (news != null) {
+                    newsList.add(news);
                 }
             }
         } catch (Exception e) {
             log.error("[Dongqiudi] Failed to parse response", e);
         }
-        
+
         return newsList;
+    }
+
+    /**
+     * 按优先级查找文章列表节点，兼容不同 API 版本
+     */
+    private JsonNode findArticlesNode(JsonNode root) {
+        for (String fieldName : new String[]{"articles", "list", "data", "feeds", "items"}) {
+            JsonNode node = root.path(fieldName);
+            if (node.isArray() && !node.isEmpty()) {
+                log.debug("[Dongqiudi] Using '{}' as articles field", fieldName);
+                return node;
+            }
+        }
+        // 最后兜底：root 本身就是数组
+        if (root.isArray() && !root.isEmpty()) {
+            log.debug("[Dongqiudi] Root itself is the articles array");
+            return root;
+        }
+        return null;
     }
     
     /**
@@ -175,8 +222,12 @@ public class DongqiudiProvider implements NewsProvider {
             // 作者
             String author = article.path("author_name").asText("懂球帝");
             
-            // URL
-            String url = "https://www.dongqiudi.com/article/" + id;
+            // URL：优先用 API 返回的 H5 链接，降级构造
+            String apiUrl1 = article.path("url1").asText("");
+            String apiUrl = article.path("url").asText("");
+            String url = !apiUrl1.isEmpty() ? apiUrl1 :
+                         (!apiUrl.isEmpty() ? apiUrl :
+                         "https://n.dongqiudi.com/webapp/news.html?articleId=" + id);
             
             // 媒体类型判断（使用 channel/showtype/is_video/template）
             String mediaType = detectMediaType(article);
@@ -375,21 +426,8 @@ public class DongqiudiProvider implements NewsProvider {
     
     @Override
     public boolean isAvailable() {
-        try {
-            String apiUrl = baseUrl + "/" + premierLeagueTabId + ".json?page=1";
-            String response = httpClient.get(apiUrl);
-            if (response == null || response.isEmpty()) {
-                return false;
-            }
-            
-            // 验证返回的是 JSON 且包含 articles
-            JsonNode root = objectMapper.readTree(response);
-            return root.has("articles");
-            
-        } catch (Exception e) {
-            log.warn("[Dongqiudi] Availability check failed", e);
-            return false;
-        }
+        // 不做实时 HTTP 探测，fetchLatest() 内部有完整容错
+        return true;
     }
     
     @Override
@@ -402,5 +440,95 @@ public class DongqiudiProvider implements NewsProvider {
      */
     public String getCurrentTabId() {
         return premierLeagueTabId;
+    }
+
+    /**
+     * 抓取懂球帝 PC 版文章正文
+     * URL: https://www.dongqiudi.com/articles/{articleId}.html
+     *
+     * 结构：<div class="con"><div style="display:none;"> 段落 + 图片
+     * 返回格式：段落用 \n\n 分隔，图片用 [IMG:url] 占位
+     */
+    public String fetchArticleContent(String articleId) {
+        String url = "https://www.dongqiudi.com/articles/" + articleId + ".html";
+        try {
+            String html = httpClient.get(url);
+            if (html == null || html.isEmpty()) {
+                log.warn("[Dongqiudi] Empty HTML for article {}", articleId);
+                return null;
+            }
+
+            Document doc = Jsoup.parse(html);
+
+            // 定位正文容器：<div class="con"> 下的第一个隐藏 div
+            Element conDiv = doc.selectFirst("div.con");
+            if (conDiv == null) {
+                log.debug("[Dongqiudi] No .con div found for article {}", articleId);
+                return null;
+            }
+
+            // 隐藏的 SEO 快照 div 包含完整正文
+            Element contentDiv = conDiv.selectFirst("div[style*=display:none]");
+            if (contentDiv == null) {
+                // 降级：直接用 .con 内容
+                contentDiv = conDiv;
+            }
+
+            List<String> blocks = new ArrayList<>();
+            for (Element child : contentDiv.children()) {
+                String tag = child.tagName().toLowerCase();
+
+                if (tag.equals("p")) {
+                    // 段落文本
+                    String text = child.text().trim();
+                    if (!text.isEmpty()) {
+                        blocks.add(text);
+                    }
+                    // 段落内的图片
+                    for (Element img : child.select("img")) {
+                        String imgUrl = resolveImgUrl(img);
+                        if (imgUrl != null) blocks.add("[IMG:" + imgUrl + "]");
+                    }
+                } else if (tag.equals("img")) {
+                    String imgUrl = resolveImgUrl(child);
+                    if (imgUrl != null) blocks.add("[IMG:" + imgUrl + "]");
+                } else if (tag.equals("div") || tag.equals("section")) {
+                    // 嵌套 div 里的段落
+                    for (Element p : child.select("p")) {
+                        String text = p.text().trim();
+                        if (!text.isEmpty()) blocks.add(text);
+                    }
+                    for (Element img : child.select("img")) {
+                        String imgUrl = resolveImgUrl(img);
+                        if (imgUrl != null) blocks.add("[IMG:" + imgUrl + "]");
+                    }
+                }
+            }
+
+            if (blocks.isEmpty()) {
+                log.debug("[Dongqiudi] No content blocks for article {}", articleId);
+                return null;
+            }
+
+            String content = String.join("\n\n", blocks);
+            log.info("[Dongqiudi] Fetched content for article {}: {} blocks, {} chars",
+                    articleId, blocks.size(), content.length());
+            return content;
+
+        } catch (Exception e) {
+            log.warn("[Dongqiudi] Failed to fetch article {}: {}", articleId, e.getMessage());
+            return null;
+        }
+    }
+
+    private String resolveImgUrl(Element img) {
+        // 优先 orig-src（原图），其次 data-src（懒加载），最后 src
+        for (String attr : new String[]{"orig-src", "data-src", "src"}) {
+            String val = img.attr(attr).trim();
+            if (!val.isEmpty() && val.startsWith("http")) {
+                return val;
+            }
+        }
+        return null;
     }
 }

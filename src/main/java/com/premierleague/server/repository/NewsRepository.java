@@ -56,9 +56,9 @@ public interface NewsRepository extends JpaRepository<News, String> {
     Page<News> findByTag(@Param("tag") String tag, Pageable pageable);
     
     /**
-     * 根据热度排序查询
+     * 按发布时间降序排序（最新优先）
      */
-    Page<News> findAllByOrderByHotScoreDesc(Pageable pageable);
+    Page<News> findAllByOrderBySourcePublishedAtDesc(Pageable pageable);
     
     /**
      * 查询最新的资讯

@@ -3,6 +3,7 @@ package com.premierleague.server.controller;
 import com.premierleague.server.dto.ApiResponse;
 import com.premierleague.server.entity.Match;
 import com.premierleague.server.entity.Player;
+import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.service.PlayerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -50,5 +51,29 @@ public class PlayerController {
     public ApiResponse<List<Player>> searchPlayers(@RequestParam String keyword) {
         List<Player> players = playerService.searchPlayers(keyword);
         return ApiResponse.ok(players);
+    }
+
+    /**
+     * 射手榜
+     * GET /api/players/top-scorers?limit=20
+     */
+    @GetMapping("/top-scorers")
+    public ApiResponse<List<PlayerStat>> getTopScorers(
+            @RequestParam(defaultValue = "20") int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 50));
+        List<PlayerStat> result = playerService.getTopScorers(safeLimit);
+        return ApiResponse.ok(result);
+    }
+
+    /**
+     * 助攻榜
+     * GET /api/players/top-assists?limit=20
+     */
+    @GetMapping("/top-assists")
+    public ApiResponse<List<PlayerStat>> getTopAssists(
+            @RequestParam(defaultValue = "20") int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 50));
+        List<PlayerStat> result = playerService.getTopAssists(safeLimit);
+        return ApiResponse.ok(result);
     }
 }

@@ -69,15 +69,11 @@ public class MatchService {
         // 1. 先查数据库
         List<Match> matches = matchRepository.findByMatchdayOrderByMatchDateAsc(matchday);
         
-        // 2. 如果数据库中没有，从 API 获取并保存
+        // 数据库无数据时直接返回空，不实时调外网
         if (matches.isEmpty()) {
-            log.info("[MatchService] No matches in DB for matchday {}, fetching from API", matchday);
-            List<Match> apiMatches = footballDataProvider.fetchMatchesByMatchday(matchday);
-            if (!apiMatches.isEmpty()) {
-                matches = saveMatches(apiMatches);
-            }
+            log.debug("[MatchService] No matches in DB for matchday {}, returning empty", matchday);
         }
-        
+
         return matches;
     }
 
@@ -95,15 +91,12 @@ public class MatchService {
         // 1. 先查数据库
         List<Match> matches = matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(start, end);
         
-        // 2. 如果数据库中没有，从 API 获取并保存
+        // 数据库无数据时直接返回空，不实时调外网（避免接口超时）
+        // 比赛数据由定时任务定期同步
         if (matches.isEmpty()) {
-            log.info("[MatchService] No matches in DB for date {}, fetching from API", date);
-            List<Match> apiMatches = footballDataProvider.fetchMatchesByDate(date);
-            if (!apiMatches.isEmpty()) {
-                matches = saveMatches(apiMatches);
-            }
+            log.debug("[MatchService] No matches in DB for date {}, returning empty", date);
         }
-        
+
         return matches;
     }
 

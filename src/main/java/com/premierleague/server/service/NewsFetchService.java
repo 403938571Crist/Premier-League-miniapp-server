@@ -46,7 +46,8 @@ public class NewsFetchService {
         for (String sourceType : sources) {
             providers.stream()
                     .filter(p -> p.getSourceType().equals(sourceType))
-                    .filter(NewsProvider::isAvailable)
+                    // 不再用 isAvailable() 过滤：各 provider 的 fetchLatest() 已有 try-catch 容错
+                    // 以前的问题：isAvailable() 本身发 HTTP 请求，超时/失败就直接跳过整个 provider
                     .findFirst()
                     .ifPresent(provider -> fetchFromProvider(provider, frequencyLevel));
         }
@@ -161,9 +162,7 @@ public class NewsFetchService {
         log.info("[Fetch] Starting full fetch for all providers");
         
         for (NewsProvider provider : providers) {
-            if (provider.isAvailable()) {
-                fetchFromProvider(provider, provider.getFrequencyLevel());
-            }
+            fetchFromProvider(provider, provider.getFrequencyLevel());
         }
     }
     
@@ -194,23 +193,27 @@ public class NewsFetchService {
      * 判断是否更新已有新闻
      */
     private boolean shouldUpdate(News existing, News fetched) {
-        // 内容长度有显著变化
-        if (existing.getContent() != null && fetched.getContent() != null) {
-            int existingLen = existing.getContent().length();
-            int fetchedLen = fetched.getContent().length();
-            // 新内容比旧内容长20%以上
-            if (fetchedLen > existingLen * 1.2) {
+        // 旧数据无正文，新数据有正文 → 直接更新
+        boolean existingHasContent = existing.getContent() != null && !existing.getContent().isEmpty();
+        boolean fetchedHasContent = fetched.getContent() != null && !fetched.getContent().isEmpty();
+        if (!existingHasContent && fetchedHasContent) {
+            return true;
+        }
+
+        // 两者都有内容，但新内容更长（20%以上）
+        if (existingHasContent && fetchedHasContent) {
+            if (fetched.getContent().length() > existing.getContent().length() * 1.2) {
                 return true;
             }
         }
-        
+
         // 热度值变化较大
         if (existing.getHotScore() != null && fetched.getHotScore() != null) {
             if (Math.abs(fetched.getHotScore() - existing.getHotScore()) > 10) {
                 return true;
             }
         }
-        
+
         return false;
     }
     

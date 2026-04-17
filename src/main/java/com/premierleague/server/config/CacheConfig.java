@@ -68,7 +68,15 @@ public class CacheConfig {
             buildCache("fdTeamSquad", 6, TimeUnit.HOURS),          // 21600s
             buildCache("fdPlayerDetail", 12, TimeUnit.HOURS),      // 43200s
             buildCache("fdPlayerMatches", 1, TimeUnit.HOURS),      // 3600s
-            buildCache("fdRateLimit", 1, TimeUnit.MINUTES)         // 60s
+            buildCache("fdScorers", 10, TimeUnit.MINUTES),         // 600s
+            buildCache("fdFbrefScorers", 10, TimeUnit.MINUTES),    // 600s (fbref 备用数据源)
+            buildCache("fdPulseliveScorers", 10, TimeUnit.MINUTES),// 600s (pulselive 官方备用)
+            buildCache("fdUnderstatScorers", 10, TimeUnit.MINUTES),// 600s (understat 主备用)
+            buildCache("fdRateLimit", 1, TimeUnit.MINUTES),        // 60s
+
+            // ========== 射手榜/助攻榜服务层缓存 ==========
+            buildCache("topScorers", 10, TimeUnit.MINUTES),
+            buildCache("topAssists", 10, TimeUnit.MINUTES)
         ));
         return manager;
     }

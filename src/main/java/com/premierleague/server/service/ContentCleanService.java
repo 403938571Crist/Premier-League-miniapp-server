@@ -173,7 +173,10 @@ public class ContentCleanService {
         String sourceType = news.getSourceType();
         if ("romano".equals(sourceType)) score += 30;
         else if ("official".equals(sourceType)) score += 20;
+        else if ("sky".equals(sourceType)) score += 18;
+        else if ("guardian".equals(sourceType)) score += 15;
         else if ("x".equals(sourceType)) score += 15;
+        else if ("reddit".equals(sourceType)) score += 5; // Reddit 热度由 RedditProvider 自己计算，此处仅兜底
         
         // 根据媒体类型加权
         String mediaType = news.getMediaType();

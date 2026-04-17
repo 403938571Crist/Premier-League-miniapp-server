@@ -65,7 +65,7 @@ public class NewsService {
         } else if (tag != null && !tag.isEmpty()) {
             newsPage = newsRepository.findByTag(tag, pageable);
         } else {
-            newsPage = newsRepository.findAllByOrderByHotScoreDescThenTimeDesc(pageable);
+            newsPage = newsRepository.findAllByOrderBySourcePublishedAtDesc(pageable);
         }
         
         List<NewsListItem> items = newsPage.getContent().stream()
@@ -182,7 +182,9 @@ public class NewsService {
         }
         return Arrays.stream(content.split("\n\n"))
                 .filter(p -> !p.trim().isEmpty())
-                .map(ArticleBlock::paragraph)
+                .map(p -> p.startsWith("[IMG:") && p.endsWith("]")
+                        ? ArticleBlock.image(p.substring(5, p.length() - 1))
+                        : ArticleBlock.paragraph(p))
                 .collect(Collectors.toList());
     }
 }

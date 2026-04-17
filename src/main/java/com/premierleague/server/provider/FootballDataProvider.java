@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.premierleague.server.entity.Match;
 import com.premierleague.server.entity.Player;
 import com.premierleague.server.entity.Team;
+import com.premierleague.server.model.PlayerStat;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -120,6 +121,7 @@ public class FootballDataProvider {
         if (cacheKey.startsWith("fd:team:squad:")) return "fdTeamSquad";
         if (cacheKey.startsWith("fd:player:detail:")) return "fdPlayerDetail";
         if (cacheKey.startsWith("fd:player:") && cacheKey.contains(":matches:")) return "fdPlayerMatches";
+        if (cacheKey.startsWith("fd:scorers:")) return "fdScorers";
         if (cacheKey.startsWith("fd:rate_limit")) return "fdRateLimit";
         return "fdMatchesDate";
     }
@@ -572,6 +574,98 @@ public class FootballDataProvider {
             log.error("[FootballDataProvider] Failed to fetch player matches: {}", e.getMessage());
             return new ArrayList<>();
         }
+    }
+
+    // ==================== 射手榜/助攻榜 ====================
+
+    /**
+     * 获取英超射手榜（同时包含助攻数据）
+     * GET /v4/competitions/PL/scorers?limit={limit}
+     *
+     * 返回未排序的球员赛季数据列表（goals/assists 均在内），由 Service 层排序并赋 rank
+     */
+    public List<PlayerStat> fetchScorers(int limit) {
+        String cacheKey = "fd:scorers:" + limit;
+        String cached = getFromCache(cacheKey);
+        if (cached != null) {
+            log.info("[FootballDataProvider] Cache hit for scorers limit={}", limit);
+            return parseScorersFromJson(cached);
+        }
+
+        if (isRateLimitExceeded()) {
+            log.warn("[FootballDataProvider] Rate limit exceeded, returning empty list for scorers");
+            return new ArrayList<>();
+        }
+
+        try {
+            log.info("[FootballDataProvider] Fetching scorers limit={}", limit);
+
+            String response = getWebClient()
+                .get()
+                .uri(uriBuilder -> uriBuilder
+                    .path("/competitions/{competition}/scorers")
+                    .queryParam("limit", limit)
+                    .build(competitionCode))
+                .retrieve()
+                .toEntity(String.class)
+                .doOnSuccess(entity -> updateRateLimitInfo(entity.getHeaders()))
+                .block(Duration.ofSeconds(10))
+                .getBody();
+
+            saveToCache(cacheKey, response);
+            return parseScorersFromJson(response);
+        } catch (WebClientResponseException e) {
+            log.error("[FootballDataProvider] Scorers API error: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
+            return new ArrayList<>();
+        } catch (Exception e) {
+            log.error("[FootballDataProvider] Failed to fetch scorers: {}", e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 解析 scorers JSON 为 PlayerStat 列表（未排序，rank 为 null）
+     */
+    private List<PlayerStat> parseScorersFromJson(String json) {
+        List<PlayerStat> stats = new ArrayList<>();
+        if (json == null || json.isEmpty()) return stats;
+        try {
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode scorers = root.path("scorers");
+            if (!scorers.isArray()) return stats;
+
+            for (JsonNode row : scorers) {
+                JsonNode p = row.path("player");
+                JsonNode t = row.path("team");
+
+                String position = p.path("position").asText("");
+                String teamShortName = t.path("shortName").asText("");
+
+                PlayerStat stat = new PlayerStat(
+                        null,
+                        p.path("id").asLong(),
+                        p.path("name").asText(""),
+                        null,   // chineseName 目前不做映射（暂无球员中文名数据源）
+                        p.path("nationality").asText(""),
+                        position,
+                        getChinesePosition(position),
+                        p.path("shirtNumber").isNull() ? null : p.path("shirtNumber").asInt(),
+                        t.path("id").asLong(),
+                        t.path("name").asText(""),
+                        teamShortName,
+                        getChineseTeamName(teamShortName),
+                        t.path("crest").asText(""),
+                        row.path("goals").isNull() ? 0 : row.path("goals").asInt(0),
+                        row.path("assists").isNull() ? 0 : row.path("assists").asInt(0),
+                        row.path("penalties").isNull() ? 0 : row.path("penalties").asInt(0),
+                        row.path("playedMatches").isNull() ? 0 : row.path("playedMatches").asInt(0)
+                );
+                stats.add(stat);
+            }
+        } catch (Exception e) {
+            log.error("[FootballDataProvider] Failed to parse scorers JSON: {}", e.getMessage());
+        }
+        return stats;
     }
 
     // ==================== JSON 解析方法 ====================

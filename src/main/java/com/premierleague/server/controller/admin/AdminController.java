@@ -2,11 +2,15 @@ package com.premierleague.server.controller.admin;
 
 import com.premierleague.server.dto.ApiResponse;
 import com.premierleague.server.entity.FetchLog;
+import com.premierleague.server.entity.News;
+import com.premierleague.server.provider.DongqiudiProvider;
 import com.premierleague.server.provider.NewsProvider;
 import com.premierleague.server.repository.FetchLogRepository;
+import com.premierleague.server.repository.NewsRepository;
 import com.premierleague.server.service.NewsFetchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -27,6 +31,8 @@ public class AdminController {
     
     private final NewsFetchService newsFetchService;
     private final FetchLogRepository fetchLogRepository;
+    private final NewsRepository newsRepository;
+    private final DongqiudiProvider dongqiudiProvider;
     private final List<NewsProvider> providers;
     
     /**
@@ -169,6 +175,63 @@ public class AdminController {
         return ApiResponse.ok(sources);
     }
     
+    /**
+     * 懂球帝正文批量回填
+     * POST /api/admin/backfill/dongqiudi?limit=50
+     * 对 content 为空的懂球帝文章，从 PC 页抓取正文并更新
+     */
+    @PostMapping("/backfill/dongqiudi")
+    public ApiResponse<Map<String, Object>> backfillDongqiudi(
+            @RequestParam(defaultValue = "50") int limit) {
+        log.info("[Admin] Starting dongqiudi content backfill, limit={}", limit);
+
+        List<News> articles = newsRepository
+                .findBySourceTypeOrderBySourcePublishedAtDesc("dongqiudi", PageRequest.of(0, limit))
+                .getContent()
+                .stream()
+                .filter(n -> n.getContent() == null || n.getContent().isEmpty())
+                .toList();
+
+        int updated = 0, failed = 0;
+        for (News article : articles) {
+            String articleId = extractDongqiudiId(article.getUrl());
+            if (articleId == null) { failed++; continue; }
+            try {
+                String content = dongqiudiProvider.fetchArticleContent(articleId);
+                if (content != null && !content.isEmpty()) {
+                    article.setContent(content);
+                    newsRepository.save(article);
+                    updated++;
+                }
+                Thread.sleep(300);
+            } catch (Exception e) {
+                log.warn("[Admin] Backfill failed for {}: {}", articleId, e.getMessage());
+                failed++;
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("total", articles.size());
+        result.put("updated", updated);
+        result.put("failed", failed);
+        log.info("[Admin] Dongqiudi backfill done: {}", result);
+        return ApiResponse.ok(result);
+    }
+
+    /** 从懂球帝 URL 中提取文章 ID */
+    private String extractDongqiudiId(String url) {
+        if (url == null) return null;
+        // 兼容：/articles/12345.html、/articles/12345、/article/12345
+        java.util.regex.Matcher m1 = java.util.regex.Pattern
+                .compile("/articles?/(\\d+)(?:\\.html)?").matcher(url);
+        if (m1.find()) return m1.group(1);
+        // https://n.dongqiudi.com/webapp/news.html?articleId=5783671
+        java.util.regex.Matcher m2 = java.util.regex.Pattern
+                .compile("[?&]articleId=(\\d+)").matcher(url);
+        if (m2.find()) return m2.group(1);
+        return null;
+    }
+
     /**
      * 健康检查
      * GET /api/admin/health

@@ -25,11 +25,19 @@ public class DuplicateCheckService {
     
     /**
      * 生成去重指纹
+     * 只用标题（归一化后）+ 发布日期（精确到小时），不含 sourceType
+     * 这样同一新闻被不同来源抓到时也能去重
      */
     public String generateFingerprint(News news) {
-        String raw = news.getTitle() + "|" + news.getSourceType() + "|" + 
-                news.getSourcePublishedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-        
+        // 标题归一化：去除标点空格差异
+        String normalizedTitle = news.getTitle()
+                .replaceAll("[\\s\\p{Punct}\\uff01\\u3002\\uff0c\\u3001\\uff1b\\uff1a\\u201c\\u201d\\u2018\\u2019\\u3010\\u3011\\u300a\\u300b\\uff1f]", "")
+                .toLowerCase();
+        // 精确到小时，容忍同一新闻被不同来源在同一小时内抓到
+        String hourSlot = news.getSourcePublishedAt()
+                .format(DateTimeFormatter.ofPattern("yyyyMMddHH"));
+        String raw = normalizedTitle + "|" + hourSlot;
+
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");
             byte[] hash = md.digest(raw.getBytes(StandardCharsets.UTF_8));
@@ -39,7 +47,6 @@ public class DuplicateCheckService {
             }
             return sb.toString();
         } catch (NoSuchAlgorithmException e) {
-            // MD5 应该总是可用，如果失败使用备选方案
             return String.valueOf(raw.hashCode());
         }
     }

@@ -2,13 +2,19 @@ package com.premierleague.server.service;
 
 import com.premierleague.server.entity.Match;
 import com.premierleague.server.entity.Player;
+import com.premierleague.server.model.PlayerStat;
+import com.premierleague.server.provider.FbrefProvider;
 import com.premierleague.server.provider.FootballDataProvider;
+import com.premierleague.server.provider.PulseliveProvider;
+import com.premierleague.server.provider.UnderstatProvider;
 import com.premierleague.server.repository.PlayerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,6 +28,9 @@ public class PlayerService {
 
     private final PlayerRepository playerRepository;
     private final FootballDataProvider footballDataProvider;
+    private final UnderstatProvider understatProvider;
+    private final PulseliveProvider pulseliveProvider;
+    private final FbrefProvider fbrefProvider;
 
     /**
      * 获取球员详情
@@ -139,5 +148,118 @@ public class PlayerService {
     @Cacheable(value = "teamMostValuablePlayers", key = "#teamId")
     public List<Player> getMostValuablePlayers(Long teamId) {
         return playerRepository.findMostValuablePlayersByTeamId(teamId);
+    }
+
+    /**
+     * 射手榜 - 按进球数降序
+     * GET /api/players/top-scorers
+     *
+     * 多级排序：goals DESC → assists DESC → playedMatches ASC（场均进球）
+     */
+    @Cacheable(value = "topScorers", key = "#limit")
+    public List<PlayerStat> getTopScorers(int limit) {
+        log.info("[PlayerService] Getting top scorers, limit={}", limit);
+        List<PlayerStat> raw = fetchScorersWithFallback(limit);
+        if (raw == null || raw.isEmpty()) return new ArrayList<>();
+
+        List<PlayerStat> sorted = raw.stream()
+                .sorted(Comparator
+                        .comparingInt((PlayerStat s) -> s.goals() == null ? 0 : s.goals()).reversed()
+                        .thenComparing(Comparator.comparingInt((PlayerStat s) -> s.assists() == null ? 0 : s.assists()).reversed())
+                        .thenComparing(Comparator.comparingInt((PlayerStat s) -> s.playedMatches() == null ? Integer.MAX_VALUE : s.playedMatches())))
+                .limit(limit)
+                .toList();
+
+        return assignRanks(sorted);
+    }
+
+    /**
+     * 助攻榜 - 按助攻数降序
+     * GET /api/players/top-assists
+     *
+     * 多级排序：assists DESC → goals DESC → playedMatches ASC
+     * 过滤掉 assists = 0 的球员（没意义上榜）
+     */
+    @Cacheable(value = "topAssists", key = "#limit")
+    public List<PlayerStat> getTopAssists(int limit) {
+        log.info("[PlayerService] Getting top assists, limit={}", limit);
+        // 多取一些（上游是按 goals 排序的，助攻前列可能在尾部），这里抓 2 倍再本地二次排序裁剪
+        // fbref 返回全量联赛球员，不受 limit 影响；football-data 才需要多取
+        List<PlayerStat> raw = fetchScorersWithFallback(Math.max(limit * 2, 40));
+        if (raw == null || raw.isEmpty()) return new ArrayList<>();
+
+        List<PlayerStat> sorted = raw.stream()
+                .filter(s -> s.assists() != null && s.assists() > 0)
+                .sorted(Comparator
+                        .comparingInt((PlayerStat s) -> s.assists() == null ? 0 : s.assists()).reversed()
+                        .thenComparing(Comparator.comparingInt((PlayerStat s) -> s.goals() == null ? 0 : s.goals()).reversed())
+                        .thenComparing(Comparator.comparingInt((PlayerStat s) -> s.playedMatches() == null ? Integer.MAX_VALUE : s.playedMatches())))
+                .limit(limit)
+                .toList();
+
+        return assignRanks(sorted);
+    }
+
+    /**
+     * 射手/助攻数据源优先级（依次降级）：
+     *   1. football-data.org /competitions/PL/scorers   （付费端点，免费档 403）
+     *   2. understat.com /main/getPlayersStats/         （主备用源：国内直连无墙，JSON 结构最干净）
+     *   3. pulselive v3 leaderboard                     （英超官方，生产环境可直接用，dev 被 GFW DNS 污染）
+     *   4. fbref.com Standard Stats                     （Cloudflare JS challenge 常拦，保底）
+     */
+    private List<PlayerStat> fetchScorersWithFallback(int limit) {
+        List<PlayerStat> primary = footballDataProvider.fetchScorers(limit);
+        if (primary != null && !primary.isEmpty()) {
+            log.debug("[PlayerService] Using football-data.org scorers ({} rows)", primary.size());
+            return primary;
+        }
+        log.info("[PlayerService] football-data scorers unavailable, trying understat");
+        List<PlayerStat> viaUnderstat = understatProvider.fetchScorers();
+        if (viaUnderstat != null && !viaUnderstat.isEmpty()) {
+            log.info("[PlayerService] Using understat scorers ({} rows)", viaUnderstat.size());
+            return viaUnderstat;
+        }
+        log.info("[PlayerService] understat unavailable, trying pulselive");
+        List<PlayerStat> viaPulselive = pulseliveProvider.fetchScorers();
+        if (viaPulselive != null && !viaPulselive.isEmpty()) {
+            log.info("[PlayerService] Using pulselive scorers ({} rows)", viaPulselive.size());
+            return viaPulselive;
+        }
+        log.info("[PlayerService] pulselive unavailable, falling back to fbref");
+        List<PlayerStat> fallback = fbrefProvider.fetchScorers();
+        if (fallback == null) return new ArrayList<>();
+        return fallback;
+    }
+
+    /**
+     * 给排好序的列表赋 rank（1-based）
+     * 同分时共享同一排名（标准并列排名规则）
+     */
+    private List<PlayerStat> assignRanks(List<PlayerStat> sorted) {
+        List<PlayerStat> result = new ArrayList<>(sorted.size());
+        int displayRank = 0;
+        Integer prevGoals = null;
+        Integer prevAssists = null;
+        for (int i = 0; i < sorted.size(); i++) {
+            PlayerStat s = sorted.get(i);
+            // 同 goals+assists 并列同名次；否则 rank = i+1
+            boolean tieWithPrev = prevGoals != null
+                    && prevGoals.equals(s.goals())
+                    && prevAssists != null
+                    && prevAssists.equals(s.assists());
+            if (!tieWithPrev) {
+                displayRank = i + 1;
+            }
+            result.add(new PlayerStat(
+                    displayRank,
+                    s.playerId(), s.playerName(), s.chineseName(), s.nationality(),
+                    s.position(), s.chinesePosition(), s.shirtNumber(),
+                    s.teamId(), s.teamName(), s.teamShortName(), s.teamChineseName(), s.teamCrest(),
+                    s.goals(), s.assists(), s.penalties(), s.playedMatches()
+            ));
+            prevGoals = s.goals();
+            prevAssists = s.assists();
+        }
+        return result;
     }
 }

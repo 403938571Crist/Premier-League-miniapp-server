@@ -29,8 +29,8 @@ public class RomanoProvider implements NewsProvider {
     private final ContentCleanService contentCleanService;
     private final ObjectMapper objectMapper;
     
-    // nitter 实例（Twitter 镜像）- 作为备用方案
-    private static final String NITTER_URL = "https://nitter.net/FabrizioRomano/rss";
+    // nitter.net 已于 2024 年关闭，改用以下备用列表（按可用性排序）
+    // isAvailable() 不再主动 HTTP 探测，让 fetchLatest() 自行处理失败
     
     @Override
     public String getSourceType() {
@@ -75,34 +75,36 @@ public class RomanoProvider implements NewsProvider {
         }
     }
     
+    /**
+     * RSS 备用列表（nitter.net 已关闭，按存活率从高到低排列）
+     * 如有某个地址长期失效，直接从列表中删除即可。
+     * 需要 X API Bearer Token 才能彻底稳定 → 在环境变量 X_BEARER_TOKEN 中配置。
+     */
+    private static final String[] RSS_FALLBACKS = {
+        "https://rsshub.app/twitter/user/FabrizioRomano",
+        "https://nitter.poast.org/FabrizioRomano/rss",
+        "https://nitter.nl/FabrizioRomano/rss",
+        "https://nitter.1d4.us/FabrizioRomano/rss",
+        "https://bird.trom.tf/FabrizioRomano/rss"
+    };
+
     private List<News> fetchFromRss(int maxItems) {
-        try {
-            // 尝试使用 RSSHub 或类似服务
-            // 注意：这些服务可能不稳定，需要定期检查和更换
-            String[] rssUrls = {
-                "https://rsshub.app/twitter/user/FabrizioRomano",
-                "https://nitter.privacydev.net/FabrizioRomano/rss",
-            };
-            
-            for (String rssUrl : rssUrls) {
-                try {
-                    String xml = httpClient.get(rssUrl);
-                    if (xml != null && xml.contains("<item")) {
-                        log.info("[Romano] Successfully fetched from RSS: {}", rssUrl);
-                        return parseRss(xml, maxItems);
+        for (String rssUrl : RSS_FALLBACKS) {
+            try {
+                String xml = httpClient.get(rssUrl);
+                if (xml != null && xml.contains("<item")) {
+                    log.info("[Romano] RSS fetched from: {}", rssUrl);
+                    List<News> result = parseRss(xml, maxItems);
+                    if (!result.isEmpty()) {
+                        return result;
                     }
-                } catch (Exception e) {
-                    log.warn("[Romano] RSS source failed: {}", rssUrl);
                 }
+            } catch (Exception e) {
+                log.warn("[Romano] RSS source failed ({}): {}", rssUrl, e.getMessage());
             }
-            
-            log.warn("[Romano] All RSS sources failed");
-            return Collections.emptyList();
-            
-        } catch (Exception e) {
-            log.error("[Romano] RSS fetch failed", e);
-            return Collections.emptyList();
         }
+        log.warn("[Romano] All RSS sources failed — set X_BEARER_TOKEN for stable access");
+        return Collections.emptyList();
     }
     
     private List<News> parseXApiResponse(String json) {
@@ -250,19 +252,9 @@ public class RomanoProvider implements NewsProvider {
     
     @Override
     public boolean isAvailable() {
-        // 检查 X API Token 或 RSS 是否可用
-        String token = System.getenv("X_BEARER_TOKEN");
-        if (token != null && !token.isBlank()) {
-            return true;
-        }
-        
-        // 尝试 RSS
-        try {
-            String xml = httpClient.get("https://rsshub.app/twitter/user/FabrizioRomano");
-            return xml != null && xml.contains("<item");
-        } catch (Exception e) {
-            return false;
-        }
+        // 不在此处发 HTTP 请求（避免每次调度都多一次探测耗时/失败）
+        // fetchLatest() 内部已有完整 try-catch，失败返回空列表即可
+        return true;
     }
     
     @Override

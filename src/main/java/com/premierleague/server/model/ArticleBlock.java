@@ -34,4 +34,8 @@ public record ArticleBlock(
     public static ArticleBlock bullet(List<String> items) {
         return new ArticleBlock("bullet", null, items);
     }
+
+    public static ArticleBlock image(String url) {
+        return new ArticleBlock("image", url, null);
+    }
 }

@@ -90,6 +90,7 @@ app:
         - official
         - sky
         - guardian
+        - zhibo8
       interval-minutes: 10
       max-items-per-fetch: 50
 

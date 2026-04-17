@@ -22,60 +22,58 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 英超官方资讯源 - 中频源
- * 抓取英超官网 RSS
+ * Sky Sports 英超资讯 - 中频源
+ * RSS: https://www.skysports.com/rss/12040
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class OfficialProvider implements NewsProvider {
-    
+public class SkyProvider implements NewsProvider {
+
     private final HttpClientUtil httpClient;
     private final ContentCleanService contentCleanService;
-    
-    // BBC Sport 英超 RSS（英超官网 RSS 已不可用）
-    private static final String RSS_URL = "https://feeds.bbci.co.uk/sport/football/rss.xml";
-    
+
+    private static final String RSS_URL = "https://www.skysports.com/rss/12040";
+    private static final DateTimeFormatter RFC1123 =
+            DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss z", Locale.ENGLISH);
+
     @Override
     public String getSourceType() {
-        return "official";
+        return "sky";
     }
-    
+
     @Override
     public String getSourceName() {
-        return "英超官方";
+        return "Sky Sports";
     }
-    
+
     @Override
     public List<News> fetchLatest(int maxItems) {
-        log.info("[Official] Fetching from RSS: {}", RSS_URL);
-        
+        log.info("[Sky] Fetching from RSS: {}", RSS_URL);
         try {
             String xml = httpClient.get(RSS_URL);
-            if (xml == null || xml.isEmpty()) {
-                log.warn("[Official] Empty RSS response");
+            if (xml == null || xml.isBlank()) {
+                log.warn("[Sky] Empty RSS response");
                 return Collections.emptyList();
             }
-            
             return parseRss(xml, maxItems);
         } catch (Exception e) {
-            log.error("[Official] Failed to fetch RSS", e);
+            log.error("[Sky] Failed to fetch RSS", e);
             return Collections.emptyList();
         }
     }
-    
+
     private List<News> parseRss(String xml, int maxItems) {
         List<News> newsList = new ArrayList<>();
-        
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
             factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
             DocumentBuilder builder = factory.newDocumentBuilder();
-            
+
             Document doc = builder.parse(new ByteArrayInputStream(xml.getBytes("UTF-8")));
             NodeList items = doc.getElementsByTagName("item");
-            
+
             for (int i = 0; i < Math.min(items.getLength(), maxItems); i++) {
                 Element item = (Element) items.item(i);
                 News news = parseItem(item);
@@ -83,97 +81,108 @@ public class OfficialProvider implements NewsProvider {
                     newsList.add(news);
                 }
             }
-            
-            log.info("[Official] Parsed {} items from RSS", newsList.size());
-            
+            log.info("[Sky] Parsed {} items", newsList.size());
         } catch (Exception e) {
-            log.error("[Official] Failed to parse RSS", e);
+            log.error("[Sky] Failed to parse RSS", e);
         }
-        
         return newsList;
     }
-    
+
     private News parseItem(Element item) {
         try {
-            String title = getTextContent(item, "title");
-            String description = getTextContent(item, "description");
-            String link = getTextContent(item, "link");
-            String pubDate = getTextContent(item, "pubDate");
-            String guid = getTextContent(item, "guid");
-            
+            String title = getText(item, "title");
+            String description = getText(item, "description");
+            String link = getText(item, "link");
+            String pubDate = getText(item, "pubDate");
+            String guid = getText(item, "guid");
+
             if (title.isEmpty() || link.isEmpty()) {
-                log.warn("[Official] Missing required fields");
                 return null;
             }
-            
-            // 过滤非英超内容
-            String content = title + " " + description;
-            if (!isPremierLeagueRelated(content)) {
-                log.debug("[Official] Skipping non-PL article: {}", title.substring(0, Math.min(40, title.length())));
+
+            // Sky Sports PL RSS 已经只含英超内容，但仍做二次过滤
+            if (!isPremierLeagueRelated(title + " " + description)) {
+                log.debug("[Sky] Skipping non-PL: {}", title.substring(0, Math.min(50, title.length())));
                 return null;
             }
-            
-            // 解析发布时间
+
+            // 提取封面图：Sky RSS 中 <media:content url="..."/> 或 <enclosure url="..."/>
+            String coverImage = extractMediaUrl(item);
+
             LocalDateTime publishTime = parsePubDate(pubDate);
-            
-            // 使用 guid 或 link 作为 ID
-            String id = guid.isEmpty() ? String.valueOf(link.hashCode()) : guid;
-            
+            String idBase = guid.isEmpty() ? link : guid;
+
             News news = News.builder()
-                    .id("pl-official-" + id.hashCode())
+                    .id("sky-" + Math.abs(idBase.hashCode()))
                     .title(title)
                     .summary(description.isEmpty() ? title : description.substring(0, Math.min(description.length(), 2000)))
-                    .source("英超官网")
-                    .sourceType("official")
+                    .source("Sky Sports")
+                    .sourceType("sky")
                     .mediaType("article")
                     .sourcePublishedAt(publishTime)
                     .url(link)
-                    .coverImage("")
-                    .author("Premier League")
+                    .coverImage(coverImage)
+                    .author("Sky Sports")
                     .build();
-            
+
             news.setTags(contentCleanService.extractTags(title, description));
             news.setHotScore(contentCleanService.calculateDefaultHotScore(news));
-            
             return news;
-            
         } catch (Exception e) {
-            log.error("[Official] Failed to parse item", e);
+            log.error("[Sky] Failed to parse item", e);
             return null;
         }
     }
-    
-    private String getTextContent(Element parent, String tagName) {
-        NodeList nodes = parent.getElementsByTagName(tagName);
-        if (nodes.getLength() > 0) {
-            return nodes.item(0).getTextContent().trim();
+
+    private String extractMediaUrl(Element item) {
+        // <media:content url="..."/>
+        NodeList mediaNodes = item.getElementsByTagNameNS("http://search.yahoo.com/mrss/", "content");
+        if (mediaNodes.getLength() > 0) {
+            String url = ((Element) mediaNodes.item(0)).getAttribute("url");
+            if (!url.isEmpty()) return url;
+        }
+        // <enclosure url="..." type="image/..."/>
+        NodeList encNodes = item.getElementsByTagName("enclosure");
+        if (encNodes.getLength() > 0) {
+            Element enc = (Element) encNodes.item(0);
+            String type = enc.getAttribute("type");
+            if (type.startsWith("image")) {
+                return enc.getAttribute("url");
+            }
         }
         return "";
     }
-    
-    private static final DateTimeFormatter RFC1123_EN =
-            DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss z", Locale.ENGLISH);
+
+    private String getText(Element parent, String tagName) {
+        NodeList nodes = parent.getElementsByTagName(tagName);
+        return nodes.getLength() > 0 ? nodes.item(0).getTextContent().trim() : "";
+    }
 
     private LocalDateTime parsePubDate(String pubDate) {
-        if (pubDate == null || pubDate.isBlank()) {
-            return LocalDateTime.now();
-        }
-        // 必须用 ZonedDateTime，BBC RSS 日期含时区（GMT / +0000）
-        // LocalDateTime.parse() 遇到时区信息会直接抛异常
+        if (pubDate == null || pubDate.isBlank()) return LocalDateTime.now();
         try {
-            return ZonedDateTime.parse(pubDate, RFC1123_EN).toLocalDateTime();
+            return ZonedDateTime.parse(pubDate, RFC1123).toLocalDateTime();
         } catch (Exception e) {
             try {
                 return ZonedDateTime.parse(pubDate, DateTimeFormatter.RFC_1123_DATE_TIME).toLocalDateTime();
             } catch (Exception e2) {
-                log.warn("[Official] Failed to parse pubDate: {}, using now", pubDate);
+                log.warn("[Sky] Cannot parse pubDate: {}", pubDate);
                 return LocalDateTime.now();
             }
         }
     }
-    
+
     private boolean isPremierLeagueRelated(String text) {
         String lower = text.toLowerCase();
+
+        // 先排除明确的非足球项目（飞镖、F1、板球等也叫"Premier League"）
+        if (lower.contains("formula 1") || lower.contains(" f1 ") || lower.contains("grand prix")
+                || lower.contains("darts") || lower.contains("cricket") || lower.contains("rugby")
+                || lower.contains("nfl") || lower.contains("nba") || lower.contains("golf")) {
+            return false;
+        }
+
+        // 匹配英超球队或英超直接关键词（不再用 transfer/signing 等泛词）
         String[] keywords = {
             "premier league", "premierleague", "epl",
             "arsenal", "liverpool", "manchester city", "man city",
@@ -181,27 +190,24 @@ public class OfficialProvider implements NewsProvider {
             "newcastle", "brighton", "aston villa", "west ham",
             "brentford", "crystal palace", "everton", "fulham",
             "nottingham forest", "wolves", "wolverhampton",
-            "burnley", "luton", "sheffield united"
+            "bournemouth", "ipswich", "leicester", "southampton"
         };
-        
         for (String kw : keywords) {
-            if (lower.contains(kw)) {
-                return true;
-            }
+            if (lower.contains(kw)) return true;
         }
         return false;
     }
-    
+
     @Override
     public boolean isAvailable() {
         try {
-            String response = httpClient.get(RSS_URL);
-            return response != null && response.contains("<rss");
+            String resp = httpClient.get(RSS_URL);
+            return resp != null && resp.contains("<rss");
         } catch (Exception e) {
             return false;
         }
     }
-    
+
     @Override
     public String getFrequencyLevel() {
         return "medium";
