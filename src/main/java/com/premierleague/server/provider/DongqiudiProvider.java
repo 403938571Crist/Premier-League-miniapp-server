@@ -185,6 +185,24 @@ public class DongqiudiProvider implements NewsProvider {
     
     /**
      * 解析单篇文章 - 列表阶段轻解析
+     * 懂球帝 CDN 的 URL 路径里带尺寸，如 `/280x210/crop/-/` 或 `/200x150/crop/-/`。
+     * 经测试该 CDN 支持任意尺寸，返回 720x540 可以避免卡片里的上采样模糊。
+     * 不匹配小尺寸模式就原样返回，不破坏非 DQD CDN 的 URL。
+     */
+    private static final java.util.regex.Pattern DQD_SIZE_PATTERN =
+            java.util.regex.Pattern.compile("/\\d{2,4}x\\d{2,4}/");
+
+    private String upgradeDqdImageSize(String url) {
+        if (url == null || url.isEmpty()) return url;
+        if (!url.contains("bdimg") && !url.contains("qunliao") && !url.contains("fastdfs")) {
+            return url;
+        }
+        java.util.regex.Matcher m = DQD_SIZE_PATTERN.matcher(url);
+        if (!m.find()) return url;
+        return m.replaceFirst("/720x540/");
+    }
+
+    /*
      * 字段抽取：id, title, description, b_description, thumb, created_at, sort_timestamp,
      *          channel, showtype, is_video, template, author_name, url
      */
@@ -216,8 +234,9 @@ public class DongqiudiProvider implements NewsProvider {
             // 时间优先级：created_at > sort_timestamp > published_at > now
             LocalDateTime publishTime = parsePublishTime(article);
             
-            // 封面
-            String cover = article.path("thumb").asText("");
+            // 封面（把 DQD CDN 默认的 280x210 缩略图升级成 720x540，小程序卡片宽度 ≈750px，
+            // 原图显示时会 2.7x 上采样非常糊；720x540 刚好对齐 2x retina 宽度）
+            String cover = upgradeDqdImageSize(article.path("thumb").asText(""));
             
             // 作者
             String author = article.path("author_name").asText("懂球帝");

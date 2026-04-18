@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +29,10 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class MatchService {
+
+    private static final ZoneId APP_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final int REFRESH_LOOKBACK_DAYS = 1;
+    private static final int REFRESH_LOOKAHEAD_DAYS = 7;
 
     private final MatchRepository matchRepository;
     private final FootballDataProvider footballDataProvider;
@@ -43,12 +48,17 @@ public class MatchService {
         log.info("[MatchService] Getting today's matches");
         
         // 1. 先查数据库
-        List<Match> matches = matchRepository.findTodayMatches();
+        LocalDate today = LocalDate.now(APP_ZONE);
+        refreshMatchesIfNeeded(today, today);
+        List<Match> matches = matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(
+            today.atStartOfDay(),
+            today.atTime(LocalTime.MAX)
+        );
         
         // 2. 如果数据库没有，从 API 获取
         if (matches.isEmpty()) {
             log.info("[MatchService] No matches in DB, fetching from API");
-            List<Match> apiMatches = footballDataProvider.fetchMatchesByDate(LocalDate.now());
+            List<Match> apiMatches = footballDataProvider.fetchMatchesByDate(today);
             if (!apiMatches.isEmpty()) {
                 // 保存到数据库
                 matches = saveMatches(apiMatches);
@@ -84,7 +94,9 @@ public class MatchService {
     @Cacheable(value = "matchesByDate", key = "#date.toString()")
     public List<Match> getMatchesByDate(LocalDate date) {
         log.info("[MatchService] Getting matches for date {}", date);
-        
+
+        refreshMatchesIfNeeded(date, date);
+
         LocalDateTime start = date.atStartOfDay();
         LocalDateTime end = date.atTime(LocalTime.MAX);
         
@@ -171,8 +183,9 @@ public class MatchService {
         // 2. 如果数据库中数据不足，从 API 获取
         if (matches.size() < 5) {
             log.info("[MatchService] Not enough matches in DB for team {}, fetching from API", teamId);
-            LocalDate from = LocalDate.now().minusMonths(3);
-            LocalDate to = LocalDate.now().plusMonths(3);
+            LocalDate today = LocalDate.now(APP_ZONE);
+            LocalDate from = today.minusMonths(3);
+            LocalDate to = today.plusMonths(3);
             List<Match> apiMatches = footballDataProvider.fetchTeamMatches(teamId, from, to);
             if (!apiMatches.isEmpty()) {
                 // 合并并去重
@@ -189,6 +202,7 @@ public class MatchService {
      */
     @Cacheable(value = "matchesByDateRange", key = "#start + '-' + #end")
     public List<Match> getMatchesByDateRange(LocalDateTime start, LocalDateTime end) {
+        refreshMatchesIfNeeded(start.toLocalDate(), end.toLocalDate());
         return matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(start, end);
     }
 
@@ -258,7 +272,7 @@ public class MatchService {
      */
     public Map<String, List<Match>> getMatchesCalendar() {
         // 获取未来30天的比赛
-        LocalDateTime start = LocalDateTime.now();
+        LocalDateTime start = LocalDateTime.now(APP_ZONE);
         LocalDateTime end = start.plusDays(30);
         
         List<Match> matches = matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(start, end);
@@ -273,6 +287,35 @@ public class MatchService {
     /**
      * 保存或更新比赛
      */
+    private void refreshMatchesIfNeeded(LocalDate requestedStart, LocalDate requestedEnd) {
+        LocalDate today = LocalDate.now(APP_ZONE);
+        LocalDate refreshStart = requestedStart.isBefore(today.minusDays(REFRESH_LOOKBACK_DAYS))
+            ? today.minusDays(REFRESH_LOOKBACK_DAYS)
+            : requestedStart;
+        LocalDate refreshEnd = requestedEnd.isAfter(today.plusDays(REFRESH_LOOKAHEAD_DAYS))
+            ? today.plusDays(REFRESH_LOOKAHEAD_DAYS)
+            : requestedEnd;
+
+        if (refreshStart.isAfter(refreshEnd)) {
+            return;
+        }
+
+        for (LocalDate date = refreshStart; !date.isAfter(refreshEnd); date = date.plusDays(1)) {
+            refreshMatchesForDate(date);
+        }
+    }
+
+    private void refreshMatchesForDate(LocalDate date) {
+        try {
+            List<Match> apiMatches = footballDataProvider.fetchMatchesByDate(date);
+            if (!apiMatches.isEmpty()) {
+                saveMatches(apiMatches);
+            }
+        } catch (Exception e) {
+            log.warn("[MatchService] Failed to refresh matches for {}: {}", date, e.getMessage());
+        }
+    }
+
     public Match saveMatch(Match match) {
         // 检查是否已存在
         Optional<Match> existing = matchRepository.findByApiId(match.getApiId());

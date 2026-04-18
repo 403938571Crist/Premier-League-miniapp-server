@@ -3,8 +3,11 @@ package com.premierleague.server.service;
 import com.premierleague.server.entity.Match;
 import com.premierleague.server.entity.Player;
 import com.premierleague.server.model.PlayerStat;
+import com.premierleague.server.exception.DataUnavailableException;
+import com.premierleague.server.provider.ApiFootballProvider;
 import com.premierleague.server.provider.FbrefProvider;
 import com.premierleague.server.provider.FootballDataProvider;
+import com.premierleague.server.provider.PlPhotoProvider;
 import com.premierleague.server.provider.PulseliveProvider;
 import com.premierleague.server.provider.UnderstatProvider;
 import com.premierleague.server.repository.PlayerRepository;
@@ -28,9 +31,11 @@ public class PlayerService {
 
     private final PlayerRepository playerRepository;
     private final FootballDataProvider footballDataProvider;
+    private final ApiFootballProvider apiFootballProvider;
     private final UnderstatProvider understatProvider;
     private final PulseliveProvider pulseliveProvider;
     private final FbrefProvider fbrefProvider;
+    private final PlPhotoProvider plPhotoProvider;
 
     /**
      * 获取球员详情
@@ -160,7 +165,10 @@ public class PlayerService {
     public List<PlayerStat> getTopScorers(int limit) {
         log.info("[PlayerService] Getting top scorers, limit={}", limit);
         List<PlayerStat> raw = fetchScorersWithFallback(limit);
-        if (raw == null || raw.isEmpty()) return new ArrayList<>();
+        if (raw == null || raw.isEmpty()) {
+            throw new DataUnavailableException("scorers",
+                    "All upstream providers returned no scorer data");
+        }
 
         List<PlayerStat> sorted = raw.stream()
                 .sorted(Comparator
@@ -183,10 +191,12 @@ public class PlayerService {
     @Cacheable(value = "topAssists", key = "#limit")
     public List<PlayerStat> getTopAssists(int limit) {
         log.info("[PlayerService] Getting top assists, limit={}", limit);
-        // 多取一些（上游是按 goals 排序的，助攻前列可能在尾部），这里抓 2 倍再本地二次排序裁剪
-        // fbref 返回全量联赛球员，不受 limit 影响；football-data 才需要多取
-        List<PlayerStat> raw = fetchScorersWithFallback(Math.max(limit * 2, 40));
-        if (raw == null || raw.isEmpty()) return new ArrayList<>();
+        // 优先走 api-football 专用 /players/topassists 端点；不通再沿用"多取 scorers 再本地按 assists 重排"的兜底
+        List<PlayerStat> raw = fetchAssistsWithFallback(Math.max(limit * 2, 40));
+        if (raw == null || raw.isEmpty()) {
+            throw new DataUnavailableException("assists",
+                    "All upstream providers returned no assist data");
+        }
 
         List<PlayerStat> sorted = raw.stream()
                 .filter(s -> s.assists() != null && s.assists() > 0)
@@ -201,34 +211,69 @@ public class PlayerService {
     }
 
     /**
-     * 射手/助攻数据源优先级（依次降级）：
+     * 射手数据源优先级（依次降级）：
      *   1. football-data.org /competitions/PL/scorers   （付费端点，免费档 403）
-     *   2. understat.com /main/getPlayersStats/         （主备用源：国内直连无墙，JSON 结构最干净）
-     *   3. pulselive v3 leaderboard                     （英超官方，生产环境可直接用，dev 被 GFW DNS 污染）
-     *   4. fbref.com Standard Stats                     （Cloudflare JS challenge 常拦，保底）
+     *   2. api-football /players/topscorers             （免费档 100 req/天，稳定 JSON，首选兜底）
+     *   3. understat.com /main/getPlayersStats/         （国内直连无墙，JSON 结构最干净）
+     *   4. pulselive v3 leaderboard                     （英超官方，dev 被 GFW DNS 污染）
+     *   5. fbref.com Standard Stats                     （Cloudflare JS challenge，需 FlareSolverr）
+     *
+     * 全部空时返回空列表；上游 getTopScorers 会抛 DataUnavailableException → 503
      */
     private List<PlayerStat> fetchScorersWithFallback(int limit) {
-        List<PlayerStat> primary = footballDataProvider.fetchScorers(limit);
-        if (primary != null && !primary.isEmpty()) {
-            log.debug("[PlayerService] Using football-data.org scorers ({} rows)", primary.size());
-            return primary;
+        List<PlayerStat> result;
+
+        result = footballDataProvider.fetchScorers(limit);
+        if (result != null && !result.isEmpty()) {
+            log.debug("[PlayerService] Using football-data.org scorers ({} rows)", result.size());
+            return result;
         }
-        log.info("[PlayerService] football-data scorers unavailable, trying understat");
-        List<PlayerStat> viaUnderstat = understatProvider.fetchScorers();
-        if (viaUnderstat != null && !viaUnderstat.isEmpty()) {
-            log.info("[PlayerService] Using understat scorers ({} rows)", viaUnderstat.size());
-            return viaUnderstat;
+        log.info("[PlayerService] football-data scorers unavailable, trying api-football");
+
+        result = apiFootballProvider.fetchScorers();
+        if (result != null && !result.isEmpty()) {
+            log.info("[PlayerService] Using api-football scorers ({} rows)", result.size());
+            return result;
+        }
+        log.info("[PlayerService] api-football unavailable, trying understat");
+
+        result = understatProvider.fetchScorers();
+        if (result != null && !result.isEmpty()) {
+            log.info("[PlayerService] Using understat scorers ({} rows)", result.size());
+            return result;
         }
         log.info("[PlayerService] understat unavailable, trying pulselive");
-        List<PlayerStat> viaPulselive = pulseliveProvider.fetchScorers();
-        if (viaPulselive != null && !viaPulselive.isEmpty()) {
-            log.info("[PlayerService] Using pulselive scorers ({} rows)", viaPulselive.size());
-            return viaPulselive;
+
+        result = pulseliveProvider.fetchScorers();
+        if (result != null && !result.isEmpty()) {
+            log.info("[PlayerService] Using pulselive scorers ({} rows)", result.size());
+            return result;
         }
         log.info("[PlayerService] pulselive unavailable, falling back to fbref");
-        List<PlayerStat> fallback = fbrefProvider.fetchScorers();
-        if (fallback == null) return new ArrayList<>();
-        return fallback;
+
+        result = fbrefProvider.fetchScorers();
+        if (result != null && !result.isEmpty()) {
+            log.info("[PlayerService] Using fbref scorers ({} rows)", result.size());
+            return result;
+        }
+
+        log.warn("[PlayerService] All scorer providers exhausted, returning empty");
+        return new ArrayList<>();
+    }
+
+    /**
+     * 助攻数据源优先级：
+     *   1. api-football /players/topassists             （唯一正经的"按助攻"端点，直接返回排好序的数据）
+     *   2. 其它源都没有独立助攻端点 —— 退回 scorers 链路，本地按 assists 重排
+     */
+    private List<PlayerStat> fetchAssistsWithFallback(int limit) {
+        List<PlayerStat> direct = apiFootballProvider.fetchAssists();
+        if (direct != null && !direct.isEmpty()) {
+            log.info("[PlayerService] Using api-football assists ({} rows)", direct.size());
+            return direct;
+        }
+        log.info("[PlayerService] api-football assists unavailable, reusing scorers chain");
+        return fetchScorersWithFallback(limit);
     }
 
     /**
@@ -250,12 +295,19 @@ public class PlayerService {
             if (!tieWithPrev) {
                 displayRank = i + 1;
             }
+            // photoUrl：源已经给就直接用（PulseliveProvider），否则回源 PL CDN 查
+            String photoUrl = s.photoUrl();
+            if (photoUrl == null) {
+                photoUrl = plPhotoProvider.findPhotoUrl(s.playerName());
+            }
+
             result.add(new PlayerStat(
                     displayRank,
                     s.playerId(), s.playerName(), s.chineseName(), s.nationality(),
                     s.position(), s.chinesePosition(), s.shirtNumber(),
                     s.teamId(), s.teamName(), s.teamShortName(), s.teamChineseName(), s.teamCrest(),
-                    s.goals(), s.assists(), s.penalties(), s.playedMatches()
+                    s.goals(), s.assists(), s.penalties(), s.playedMatches(),
+                    photoUrl
             ));
             prevGoals = s.goals();
             prevAssists = s.assists();

@@ -65,6 +65,25 @@ football-data:
     squad:
       interval: 21600000    # 6 小时
 
+# API-Football (RapidAPI / api-sports.io) 配置
+# 免费档：100 请求/天，30 请求/分钟
+# 申请 Key: https://www.api-football.com/
+# 当 football-data.org /scorers 被 403 时的首选兜底
+api-football:
+  base-url: https://v3.football.api-sports.io
+  key: ${API_FOOTBALL_KEY:}             # 留空 → 自动跳过此 provider
+  league-id: 39                          # 39 = Premier League
+  season: ${API_FOOTBALL_SEASON:2024}    # 赛季年份（2024 表示 2024-25 赛季）
+
+# FlareSolverr 配置（绕过 Cloudflare JS challenge，供 fbref 兜底用）
+# 需要先本地启动 Docker: docker run -d -p 8191:8191 ghcr.io/flaresolverr/flaresolverr:latest
+# 留空或 enabled=false → fbref 走直连（大概率被 CF 挡）
+scraper:
+  flaresolverr:
+    enabled: ${FLARESOLVERR_ENABLED:false}
+    url: ${FLARESOLVERR_URL:http://localhost:8191/v1}
+    max-timeout-ms: 60000
+
 # 抓取源配置
 app:
   cors:

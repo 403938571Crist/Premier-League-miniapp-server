@@ -19,6 +19,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,6 +54,7 @@ public class FootballDataProvider {
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ISO_DATE_TIME;
+    private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Shanghai");
 
     // 上游状态到内部状态映射
     private static final java.util.Map<String, String> STATUS_MAPPING = java.util.Map.of(
@@ -658,7 +661,8 @@ public class FootballDataProvider {
                         row.path("goals").isNull() ? 0 : row.path("goals").asInt(0),
                         row.path("assists").isNull() ? 0 : row.path("assists").asInt(0),
                         row.path("penalties").isNull() ? 0 : row.path("penalties").asInt(0),
-                        row.path("playedMatches").isNull() ? 0 : row.path("playedMatches").asInt(0)
+                        row.path("playedMatches").isNull() ? 0 : row.path("playedMatches").asInt(0),
+                        null   // photoUrl - football-data 不提供
                 );
                 stats.add(stat);
             }
@@ -721,7 +725,7 @@ public class FootballDataProvider {
             // 比赛时间
             String utcDate = node.path("utcDate").asText();
             if (!utcDate.isEmpty()) {
-                match.setMatchDate(LocalDateTime.parse(utcDate, DATETIME_FORMATTER));
+                match.setMatchDate(parseMatchDate(utcDate));
             }
             
             // 状态映射
@@ -941,29 +945,39 @@ public class FootballDataProvider {
      * 获取球队中文名
      */
     private String getChineseTeamName(String shortName) {
-        // 英超球队中文名映射
+        // 英超球队中文名映射。注意 key 必须匹配 football-data.org 实际返回的 shortName，
+        // 比如 "Brighton Hove"（不是 "Brighton"）、"Leeds United"（不是 "Leeds"）、
+        // "Wolverhampton"（不是 "Wolves"），旧映射没覆盖这三个会让比赛卡回退到英文名。
         java.util.Map<String, String> nameMap = new java.util.HashMap<>();
         nameMap.put("Arsenal", "阿森纳");
         nameMap.put("Aston Villa", "阿斯顿维拉");
         nameMap.put("Brentford", "布伦特福德");
         nameMap.put("Brighton", "布莱顿");
+        nameMap.put("Brighton Hove", "布莱顿");
         nameMap.put("Burnley", "伯恩利");
         nameMap.put("Chelsea", "切尔西");
         nameMap.put("Crystal Palace", "水晶宫");
         nameMap.put("Everton", "埃弗顿");
         nameMap.put("Fulham", "富勒姆");
+        nameMap.put("Leeds United", "利兹联");
         nameMap.put("Liverpool", "利物浦");
         nameMap.put("Man City", "曼城");
         nameMap.put("Man United", "曼联");
         nameMap.put("Newcastle", "纽卡斯尔联");
+        nameMap.put("Nottingham", "诺丁汉森林");
         nameMap.put("Nottingham Forest", "诺丁汉森林");
+        nameMap.put("Sunderland", "桑德兰");
         nameMap.put("Tottenham", "热刺");
         nameMap.put("West Ham", "西汉姆联");
         nameMap.put("Wolves", "狼队");
+        nameMap.put("Wolverhampton", "狼队");
         nameMap.put("Bournemouth", "伯恩茅斯");
         nameMap.put("Sheffield United", "谢菲尔德联");
         nameMap.put("Luton Town", "卢顿");
-        
+        nameMap.put("Leicester City", "莱斯特城");
+        nameMap.put("Ipswich Town", "伊普斯维奇");
+        nameMap.put("Southampton", "南安普顿");
+
         return nameMap.getOrDefault(shortName, shortName);
     }
 
@@ -983,6 +997,21 @@ public class FootballDataProvider {
     /**
      * 速率限制信息
      */
+    private LocalDateTime parseMatchDate(String utcDate) {
+        try {
+            return OffsetDateTime.parse(utcDate, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                    .atZoneSameInstant(DISPLAY_ZONE)
+                    .toLocalDateTime();
+        } catch (Exception ignored) {
+            try {
+                return LocalDateTime.parse(utcDate, DATETIME_FORMATTER);
+            } catch (Exception e) {
+                log.warn("[FootballDataProvider] Failed to parse match date '{}': {}", utcDate, e.getMessage());
+                return null;
+            }
+        }
+    }
+
     @lombok.Data
     @lombok.Builder
     public static class RateLimitInfo {

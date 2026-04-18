@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -76,13 +77,14 @@ public class Zhibo8Provider implements NewsProvider {
         List<News> result = new ArrayList<>();
 
         try {
-            // 直播吧用 GBK 编码
+            // 直播吧原来是 GBK，现已迁到 UTF-8；按内容嗅探，避免 mojibake 把中文标题打成乱码
+            // 命中不了 PL 关键字（最后表现为 "Found 0 PL-related candidates"）
             byte[] bytes = httpClient.getBytes(LIST_URL);
             if (bytes == null || bytes.length == 0) {
                 log.warn("[Zhibo8] Empty response from list page");
                 return result;
             }
-            String html = new String(bytes, Charset.forName("GBK"));
+            String html = decodeHtml(bytes);
 
             // 提取文章链接和标题
             Pattern linkPattern = Pattern.compile(
@@ -129,7 +131,7 @@ public class Zhibo8Provider implements NewsProvider {
         try {
             byte[] bytes = httpClient.getBytes(url);
             if (bytes == null || bytes.length == 0) return null;
-            String html = new String(bytes, Charset.forName("GBK"));
+            String html = decodeHtml(bytes);
 
             // 标题
             String title = extractTag(html, "title").replace("-直播吧", "").replace("-直播吧新闻", "").trim();
@@ -147,12 +149,9 @@ public class Zhibo8Provider implements NewsProvider {
             // 正文（class="content"）
             String content = extractContent(html);
 
-            // 封面图（第一张 tu.duoduocdn.com 图片）
-            String coverImage = "";
-            Matcher imgM = Pattern.compile("src=\"(//tu\\.duoduocdn\\.com/[^\"]+)\"").matcher(html);
-            if (imgM.find()) {
-                coverImage = "https:" + imgM.group(1);
-            }
+            // 封面图：优先从正文 <div class="content"> 区间内选第一张非装饰图，
+            // 兜底再看全页。排除 static4style / logo / icon / 表情包等杂图。
+            String coverImage = pickCoverImage(html);
 
             // 指纹：用 URL 生成
             String id = "zhibo8-" + url.replaceAll(".*/([^/]+)\\.htm.*", "$1");
@@ -183,6 +182,61 @@ public class Zhibo8Provider implements NewsProvider {
             log.error("[Zhibo8] Failed to parse article: {}", url, e);
             return null;
         }
+    }
+
+    /**
+     * 从 HTML 字节里嗅探 charset：先看 &lt;meta charset=...&gt; / content="...charset=..."，
+     * 命中 utf-8 就按 UTF-8 解；否则退回 GBK（兼容历史页面）。
+     */
+    private String decodeHtml(byte[] bytes) {
+        // 只看前 2KB 足够覆盖 <head> 里的 meta
+        String head = new String(bytes, 0, Math.min(bytes.length, 2048), StandardCharsets.ISO_8859_1)
+                .toLowerCase(java.util.Locale.ROOT);
+        if (head.contains("charset=\"utf-8\"") || head.contains("charset=utf-8")
+                || head.contains("charset='utf-8'")) {
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
+        return new String(bytes, Charset.forName("GBK"));
+    }
+
+    /**
+     * 从文章 HTML 里挑一张靠谱的封面图：
+     *   1) 优先正文 <div class="content"> 区间内；
+     *   2) 只接受 *.duoduocdn.com 的图片 URL，忽略 static4style / logo / emoji 等；
+     *   3) 再不行退回全页第一张可用图。
+     * 找不到返回空串，由前端降级成 sourceType 主题色封面。
+     */
+    private String pickCoverImage(String html) {
+        // 定位正文块；正则 . 默认不匹配换行，用 DOTALL
+        Matcher contentM = Pattern.compile(
+                "class=\"content\"[\\s\\S]*?</div>",
+                Pattern.DOTALL).matcher(html);
+        String contentHtml = contentM.find() ? contentM.group() : null;
+
+        String inContent = findFirstImage(contentHtml);
+        if (!inContent.isEmpty()) return inContent;
+
+        String anywhere = findFirstImage(html);
+        return anywhere;
+    }
+
+    private static final Pattern IMG_PATTERN = Pattern.compile(
+            "src=\"(//[a-z0-9.-]*duoduocdn\\.com/[^\"]+?\\.(?:jpg|jpeg|png|gif|webp))\"",
+            Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern SKIP_HINTS = Pattern.compile(
+            "static4style|/logo|/icon|/ico/|/smile|/emoji|/face/|_btn|_bt_\\.|/ad/",
+            Pattern.CASE_INSENSITIVE);
+
+    private String findFirstImage(String fragment) {
+        if (fragment == null || fragment.isEmpty()) return "";
+        Matcher m = IMG_PATTERN.matcher(fragment);
+        while (m.find()) {
+            String url = m.group(1);
+            if (SKIP_HINTS.matcher(url).find()) continue;
+            return "https:" + url;
+        }
+        return "";
     }
 
     private String extractContent(String html) {

@@ -28,6 +28,9 @@ public record PlayerStat(
         Integer goals,
         Integer assists,
         Integer penalties,
-        Integer playedMatches
+        Integer playedMatches,
+
+        // 球员头像 URL（来自 Premier League 官方 CDN）
+        String photoUrl
 ) {
 }

@@ -199,12 +199,20 @@ public class PulseliveProvider {
                     text(team, "shortName") != null ? text(team, "shortName") : text(team, "name"),
                     null,                       // teamChineseName - 后续用现有 TeamProvider 映射
                     text(team, "crestUrl"),     // teamCrest
-                    nz(goals), nz(assists), nz(penalties), nz(games)
+                    nz(goals), nz(assists), nz(penalties), nz(games),
+                    buildPhotoUrl(player)       // 官方 CDN 头像
             );
         } catch (Exception e) {
             log.debug("[Pulselive] Row parse error: {}", e.getMessage());
             return null;
         }
+    }
+
+    /** pulselive 自己响应里带 altIds.opta，直接用官方 CDN */
+    private String buildPhotoUrl(JsonNode player) {
+        String opta = text(player, "altIds", "opta");
+        if (opta == null || opta.isBlank()) return null;
+        return "https://resources.premierleague.com/premierleague/photos/players/250x250/" + opta + ".png";
     }
 
     private Long parsePlayerId(JsonNode row, JsonNode player) {

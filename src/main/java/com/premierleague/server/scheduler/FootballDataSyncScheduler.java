@@ -488,6 +488,13 @@ public class FootballDataSyncScheduler {
                     existingMatch.setHomeHalfScore(match.getHomeHalfScore());
                     existingMatch.setAwayHalfScore(match.getAwayHalfScore());
                     existingMatch.setMatchDate(match.getMatchDate());
+                    // 同步中文名：旧行可能存的是英文 shortName，每次同步刷新
+                    if (match.getHomeTeamChineseName() != null) {
+                        existingMatch.setHomeTeamChineseName(match.getHomeTeamChineseName());
+                    }
+                    if (match.getAwayTeamChineseName() != null) {
+                        existingMatch.setAwayTeamChineseName(match.getAwayTeamChineseName());
+                    }
                     matchRepository.save(existingMatch);
                 } else {
                     // 新建

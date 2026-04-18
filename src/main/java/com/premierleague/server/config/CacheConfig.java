@@ -72,6 +72,8 @@ public class CacheConfig {
             buildCache("fdFbrefScorers", 10, TimeUnit.MINUTES),    // 600s (fbref 备用数据源)
             buildCache("fdPulseliveScorers", 10, TimeUnit.MINUTES),// 600s (pulselive 官方备用)
             buildCache("fdUnderstatScorers", 10, TimeUnit.MINUTES),// 600s (understat 主备用)
+            buildCache("apiFootballScorers", 60, TimeUnit.MINUTES),// 3600s (api-football 免费档 100 req/天，延长 TTL)
+            buildCache("apiFootballAssists", 60, TimeUnit.MINUTES),// 3600s
             buildCache("fdRateLimit", 1, TimeUnit.MINUTES),        // 60s
 
             // ========== 射手榜/助攻榜服务层缓存 ==========

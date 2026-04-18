@@ -19,7 +19,9 @@ import org.springframework.stereotype.Service;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -35,6 +37,28 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @CacheConfig(cacheNames = "news")
 public class NewsService {
+
+    private static final Set<String> BLOCKED_NEWS_KEYWORDS = Set.of(
+            "彩经",
+            "竞彩",
+            "足彩",
+            "博彩",
+            "盘口",
+            "赔率",
+            "让球",
+            "大小球",
+            "串关",
+            "单关",
+            "北单",
+            "稳胆",
+            "水位",
+            "指数",
+            "推介",
+            "betting",
+            "odds",
+            "handicap",
+            "tipster"
+    );
     
     private final NewsRepository newsRepository;
     
@@ -69,6 +93,7 @@ public class NewsService {
         }
         
         List<NewsListItem> items = newsPage.getContent().stream()
+                .filter(this::isAllowedNews)
                 .map(this::convertToListItem)
                 .collect(Collectors.toList());
         
@@ -86,6 +111,7 @@ public class NewsService {
         log.debug("[NewsService] Getting news detail from DB: id={}", id);
         
         return newsRepository.findById(id)
+                .filter(this::isAllowedNews)
                 .map(this::convertToArticle);
     }
     
@@ -105,6 +131,7 @@ public class NewsService {
                 .filter(item -> source == null || item.getSourceType().equals(source))
                 .filter(item -> teamId == null || 
                         (item.getRelatedTeamIds() != null && item.getRelatedTeamIds().contains(teamId.toString())))
+                .filter(this::isAllowedNews)
                 .map(this::convertToTransferNews)
                 .collect(Collectors.toList());
     }
@@ -186,5 +213,22 @@ public class NewsService {
                         ? ArticleBlock.image(p.substring(5, p.length() - 1))
                         : ArticleBlock.paragraph(p))
                 .collect(Collectors.toList());
+    }
+
+    private boolean isAllowedNews(News news) {
+        return !containsBlockedKeyword(news.getTitle())
+                && !containsBlockedKeyword(news.getSummary())
+                && !containsBlockedKeyword(news.getTags())
+                && !containsBlockedKeyword(news.getSourceNote())
+                && !containsBlockedKeyword(news.getContent());
+    }
+
+    private boolean containsBlockedKeyword(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+
+        String normalized = value.toLowerCase(Locale.ROOT);
+        return BLOCKED_NEWS_KEYWORDS.stream().anyMatch(normalized::contains);
     }
 }

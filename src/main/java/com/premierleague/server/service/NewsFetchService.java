@@ -99,9 +99,23 @@ public class NewsFetchService {
                     if (isDuplicate) {
                         // 检查是否需要更新
                         News existing = newsRepository.findByFingerprint(fingerprint).orElse(null);
-                        if (existing != null && shouldUpdate(existing, news)) {
-                            existing.setContent(news.getContent());
-                            existing.setHotScore(news.getHotScore());
+                        // 另外：封面 URL 变化了也顺手刷新（例如懂球帝缩略图升到 720x540、
+                        // 或历史行的 coverImage 为空）。这能让 provider 里任何图片质量修复
+                        // 随下一轮抓取自动回溯到老数据上，不用再写 backfill 脚本
+                        boolean coverChanged = existing != null
+                                && news.getCoverImage() != null
+                                && !news.getCoverImage().isEmpty()
+                                && !news.getCoverImage().equals(existing.getCoverImage());
+                        if (existing != null && (shouldUpdate(existing, news) || coverChanged)) {
+                            if (news.getContent() != null && !news.getContent().isEmpty()) {
+                                existing.setContent(news.getContent());
+                            }
+                            if (news.getHotScore() != null) {
+                                existing.setHotScore(news.getHotScore());
+                            }
+                            if (coverChanged) {
+                                existing.setCoverImage(news.getCoverImage());
+                            }
                             existing.setContentUpdatedAt(LocalDateTime.now());
                             existing.setFetchBatchId(batchId);
                             newsRepository.save(existing);

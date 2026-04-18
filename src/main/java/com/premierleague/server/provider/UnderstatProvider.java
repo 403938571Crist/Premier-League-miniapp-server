@@ -129,7 +129,7 @@ public class UnderstatProvider {
                     null,                                   // rank - service 层赋值
                     playerId,
                     name,
-                    null,                                   // chineseName
+                    mapPlayerToChinese(name),               // chineseName
                     null,                                   // nationality (understat 没有)
                     mapPosition(position),
                     mapPositionCn(position),
@@ -139,7 +139,8 @@ public class UnderstatProvider {
                     teamTitle,
                     mapTeamToChinese(teamTitle),
                     null,                                   // teamCrest
-                    goals, assists, penalties, games
+                    goals, assists, penalties, games,
+                    null                                    // photoUrl - 由 PlayerService 在裁剪 top-N 后统一补全
             );
         } catch (Exception e) {
             log.debug("[Understat] parse error: {}", e.getMessage());
@@ -183,6 +184,124 @@ public class UnderstatProvider {
     private String mapTeamToChinese(String team) {
         if (team == null) return null;
         return TEAM_ZH.getOrDefault(team, team);
+    }
+
+    /** 球员英文名 → 中文（命中则返回中文，未命中返回 null，让前端直接显示英文） */
+    private String mapPlayerToChinese(String name) {
+        if (name == null || name.isEmpty()) return null;
+        return PLAYER_ZH.get(name);
+    }
+
+    private static final Map<String, String> PLAYER_ZH = new HashMap<>();
+    static {
+        // 射手榜/助攻榜 热门球员（以本赛季数据为准）
+        PLAYER_ZH.put("Erling Haaland", "哈兰德");
+        PLAYER_ZH.put("Mohamed Salah", "萨拉赫");
+        PLAYER_ZH.put("Bruno Fernandes", "B·费尔南德斯");
+        PLAYER_ZH.put("Harry Kane", "凯恩");
+        PLAYER_ZH.put("Bukayo Saka", "萨卡");
+        PLAYER_ZH.put("Cole Palmer", "帕尔默");
+        PLAYER_ZH.put("Phil Foden", "福登");
+        PLAYER_ZH.put("Son Heung-Min", "孙兴慜");
+        PLAYER_ZH.put("Alexander Isak", "伊萨克");
+        PLAYER_ZH.put("Viktor Gyokeres", "约凯雷什");
+        PLAYER_ZH.put("Viktor Gyökeres", "约凯雷什");
+        PLAYER_ZH.put("Ollie Watkins", "沃特金斯");
+        PLAYER_ZH.put("Dominic Solanke", "索兰克");
+        PLAYER_ZH.put("Jarrod Bowen", "鲍文");
+        PLAYER_ZH.put("Kai Havertz", "哈弗茨");
+        PLAYER_ZH.put("Gabriel Jesus", "热苏斯");
+        PLAYER_ZH.put("Gabriel Martinelli", "马丁内利");
+        PLAYER_ZH.put("Martin Ødegaard", "厄德高");
+        PLAYER_ZH.put("Martin Odegaard", "厄德高");
+        PLAYER_ZH.put("Declan Rice", "赖斯");
+        PLAYER_ZH.put("William Saliba", "萨利巴");
+        PLAYER_ZH.put("Gabriel Magalhaes", "加布里埃尔");
+        PLAYER_ZH.put("Virgil van Dijk", "范戴克");
+        PLAYER_ZH.put("Trent Alexander-Arnold", "阿诺德");
+        PLAYER_ZH.put("Luis Díaz", "路易斯·迪亚斯");
+        PLAYER_ZH.put("Luis Diaz", "路易斯·迪亚斯");
+        PLAYER_ZH.put("Darwin Núñez", "努涅斯");
+        PLAYER_ZH.put("Darwin Nunez", "努涅斯");
+        PLAYER_ZH.put("Hugo Ekitike", "埃基蒂克");
+        PLAYER_ZH.put("Kevin De Bruyne", "德布劳内");
+        PLAYER_ZH.put("Rodri", "罗德里");
+        PLAYER_ZH.put("Bernardo Silva", "B·席尔瓦");
+        PLAYER_ZH.put("Rúben Dias", "鲁本·迪亚斯");
+        PLAYER_ZH.put("Ruben Dias", "鲁本·迪亚斯");
+        PLAYER_ZH.put("Jérémy Doku", "多库");
+        PLAYER_ZH.put("Jeremy Doku", "多库");
+        PLAYER_ZH.put("Savinho", "萨维尼奥");
+        PLAYER_ZH.put("Mathys Tel", "泰尔");
+        PLAYER_ZH.put("Mathis Cherki", "谢尔基");
+        PLAYER_ZH.put("Rayan Cherki", "谢尔基");
+        PLAYER_ZH.put("Marcus Rashford", "拉什福德");
+        PLAYER_ZH.put("Alejandro Garnacho", "加尔纳乔");
+        PLAYER_ZH.put("Rasmus Højlund", "霍伊伦德");
+        PLAYER_ZH.put("Rasmus Hojlund", "霍伊伦德");
+        PLAYER_ZH.put("Casemiro", "卡塞米罗");
+        PLAYER_ZH.put("Bryan Mbeumo", "姆伯莫");
+        PLAYER_ZH.put("Nicolas Jackson", "尼古拉斯·杰克逊");
+        PLAYER_ZH.put("Enzo Fernández", "恩佐·费尔南德斯");
+        PLAYER_ZH.put("Enzo Fernandez", "恩佐·费尔南德斯");
+        PLAYER_ZH.put("Moisés Caicedo", "凯塞多");
+        PLAYER_ZH.put("Moises Caicedo", "凯塞多");
+        PLAYER_ZH.put("João Pedro", "若昂·佩德罗");
+        PLAYER_ZH.put("Joao Pedro", "若昂·佩德罗");
+        PLAYER_ZH.put("Richarlison", "里夏利松");
+        PLAYER_ZH.put("Dejan Kulusevski", "库卢塞夫斯基");
+        PLAYER_ZH.put("Brennan Johnson", "布伦南·约翰逊");
+        PLAYER_ZH.put("James Maddison", "麦迪逊");
+        PLAYER_ZH.put("Cristian Romero", "罗梅罗");
+        PLAYER_ZH.put("Guglielmo Vicario", "维卡里奥");
+        PLAYER_ZH.put("Micky van de Ven", "范德文");
+        PLAYER_ZH.put("Anthony Gordon", "戈登");
+        PLAYER_ZH.put("Bruno Guimarães", "布鲁诺·吉马良斯");
+        PLAYER_ZH.put("Bruno Guimaraes", "布鲁诺·吉马良斯");
+        PLAYER_ZH.put("Sandro Tonali", "托纳利");
+        PLAYER_ZH.put("Nick Pope", "波普");
+        PLAYER_ZH.put("Thiago", "伊戈尔·蒂亚戈");     // Brentford 的 Igor Thiago（understat 里就叫 Thiago）
+        PLAYER_ZH.put("Igor Thiago", "伊戈尔·蒂亚戈");
+        PLAYER_ZH.put("Morgan Rogers", "摩根·罗杰斯");
+        PLAYER_ZH.put("Morgan Gibbs-White", "吉布斯-怀特");
+        PLAYER_ZH.put("Amad Diallo", "阿马德·迪亚洛");
+        PLAYER_ZH.put("Dominik Szoboszlai", "索博斯洛伊");
+        PLAYER_ZH.put("Alexis Mac Allister", "麦卡利斯特");
+        PLAYER_ZH.put("Cody Gakpo", "加克波");
+        PLAYER_ZH.put("Diogo Jota", "若塔");
+        PLAYER_ZH.put("Ibrahima Konaté", "科纳特");
+        PLAYER_ZH.put("Ibrahima Konate", "科纳特");
+        PLAYER_ZH.put("Joshua Kimmich", "基米希");
+        PLAYER_ZH.put("Mikel Merino", "梅里诺");
+        PLAYER_ZH.put("Leandro Trossard", "特罗萨德");
+        PLAYER_ZH.put("Ethan Nwaneri", "恩瓦内里");
+        PLAYER_ZH.put("Myles Lewis-Skelly", "刘易斯-斯凯利");
+        PLAYER_ZH.put("Antoine Semenyo", "塞门约");
+        PLAYER_ZH.put("Danny Welbeck", "韦尔贝克");
+        PLAYER_ZH.put("Kaoru Mitoma", "三笘薫");
+        PLAYER_ZH.put("João Pedro", "若昂·佩德罗");
+        PLAYER_ZH.put("Evan Ferguson", "弗格森");
+        PLAYER_ZH.put("Jean-Philippe Mateta", "马特塔");
+        PLAYER_ZH.put("Eberechi Eze", "埃泽");
+        PLAYER_ZH.put("Marc Guéhi", "盖希");
+        PLAYER_ZH.put("Marc Guehi", "盖希");
+        PLAYER_ZH.put("Iliman Ndiaye", "恩迪亚耶");
+        PLAYER_ZH.put("Jack Grealish", "格拉利什");
+        PLAYER_ZH.put("James Tarkowski", "塔科夫斯基");
+        PLAYER_ZH.put("James Garner", "加纳");
+        PLAYER_ZH.put("Dominic Calvert-Lewin", "卡尔弗特-勒温");
+        PLAYER_ZH.put("Harry Wilson", "哈里·威尔逊");
+        PLAYER_ZH.put("Raúl Jiménez", "希门尼斯");
+        PLAYER_ZH.put("Raul Jimenez", "希门尼斯");
+        PLAYER_ZH.put("Alex Iwobi", "伊沃比");
+        PLAYER_ZH.put("Andreas Pereira", "佩雷拉");
+        PLAYER_ZH.put("Matheus Cunha", "库尼亚");
+        PLAYER_ZH.put("Hwang Hee-Chan", "黄喜灿");
+        PLAYER_ZH.put("Morgan Gibbs-White", "吉布斯-怀特");
+        PLAYER_ZH.put("Chris Wood", "伍德");
+        PLAYER_ZH.put("Callum Hudson-Odoi", "哈德森-奥多伊");
+        PLAYER_ZH.put("Mbeumo Bryan", "姆伯莫");
+        PLAYER_ZH.put("Yoane Wissa", "维萨");
     }
 
     private static final Map<String, String> TEAM_ZH = new HashMap<>();

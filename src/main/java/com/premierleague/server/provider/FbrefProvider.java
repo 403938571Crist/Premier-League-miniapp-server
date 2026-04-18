@@ -1,6 +1,7 @@
 package com.premierleague.server.provider;
 
 import com.premierleague.server.model.PlayerStat;
+import com.premierleague.server.util.FlareSolverrClient;
 import com.premierleague.server.util.HttpClientUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,30 +38,48 @@ public class FbrefProvider {
     private static final String FBREF_URL = "https://fbref.com/en/comps/9/stats/Premier-League-Stats";
 
     private final HttpClientUtil httpClient;
+    private final FlareSolverrClient flareSolverr;
 
     /**
      * 抓取英超所有出场球员的赛季数据（含进球/助攻）
      * 返回未排序的 PlayerStat 列表（rank 为 null，由 service 层赋值）
+     *
+     * 抓取策略：
+     *   - 优先走 FlareSolverr（若启用）—— 能过 Cloudflare JS challenge
+     *   - 降级直连 —— fbref 大概率返回 "Just a moment..." 挑战页，解析出 0 行
      */
     @Cacheable(value = "fdFbrefScorers", key = "'all'")
     public List<PlayerStat> fetchScorers() {
         List<PlayerStat> stats = new ArrayList<>();
         try {
-            log.info("[Fbref] Fetching scorers from {}", FBREF_URL);
+            String html = null;
 
-            // fbref 对 UA 敏感，需要模拟浏览器
-            Map<String, String> headers = new HashMap<>();
-            headers.put("User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                            + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-            headers.put("Accept",
-                    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            headers.put("Accept-Language", "en-US,en;q=0.9");
-            headers.put("Referer", "https://fbref.com/en/comps/9/Premier-League-Stats");
+            if (flareSolverr.isEnabled()) {
+                log.info("[Fbref] Fetching scorers via FlareSolverr: {}", FBREF_URL);
+                html = flareSolverr.get(FBREF_URL);
+            }
+            if (html == null || html.isEmpty()) {
+                log.info("[Fbref] FlareSolverr unavailable/disabled, trying direct: {}", FBREF_URL);
 
-            String html = httpClient.getWithHeaders(FBREF_URL, headers);
+                // fbref 对 UA 敏感，需要模拟浏览器
+                Map<String, String> headers = new HashMap<>();
+                headers.put("User-Agent",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+                headers.put("Accept",
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                headers.put("Accept-Language", "en-US,en;q=0.9");
+                headers.put("Referer", "https://fbref.com/en/comps/9/Premier-League-Stats");
+
+                html = httpClient.getWithHeaders(FBREF_URL, headers);
+            }
+
             if (html == null || html.isEmpty()) {
                 log.warn("[Fbref] Empty HTML, cannot parse scorers");
+                return stats;
+            }
+            if (html.contains("Just a moment") || html.contains("challenge-platform")) {
+                log.warn("[Fbref] Hit Cloudflare challenge page (no FlareSolverr?), giving up");
                 return stats;
             }
 
@@ -128,7 +147,8 @@ public class FbrefProvider {
                     nz(goals),
                     nz(assists),
                     nz(penalties),
-                    nz(games)
+                    nz(games),
+                    null                            // photoUrl - fbref 不提供
             );
         } catch (Exception e) {
             log.debug("[Fbref] Failed to parse row: {}", e.getMessage());

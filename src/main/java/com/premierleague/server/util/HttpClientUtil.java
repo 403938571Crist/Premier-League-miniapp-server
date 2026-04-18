@@ -148,6 +148,24 @@ public class HttpClientUtil {
     }
 
     /**
+     * POST application/json，用于 FlareSolverr 等 JSON-RPC 风格接口
+     */
+    public String postJson(String url, String jsonBody) {
+        try {
+            return webClient.post().uri(url)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .bodyValue(jsonBody)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(90));
+        } catch (Exception e) {
+            log.error("HTTP POST JSON failed: {}", url, e);
+            return null;
+        }
+    }
+
+    /**
      * POST x-www-form-urlencoded，用于 understat 这种老派站点的 AJAX 端点
      */
     public String postForm(String url, String formBody, Map<String, String> headers) {
