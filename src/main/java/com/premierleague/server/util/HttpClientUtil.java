@@ -148,6 +148,27 @@ public class HttpClientUtil {
     }
 
     /**
+     * HEAD request for checking whether a remote asset exists.
+     */
+    public boolean headOk(String url, Map<String, String> headers) {
+        try {
+            var spec = webClient.head().uri(url);
+            if (headers != null) {
+                for (Map.Entry<String, String> entry : headers.entrySet()) {
+                    spec = spec.header(entry.getKey(), entry.getValue());
+                }
+            }
+            var response = spec.retrieve()
+                    .toBodilessEntity()
+                    .block(Duration.ofSeconds(15));
+            return response != null && response.getStatusCode().is2xxSuccessful();
+        } catch (Exception e) {
+            log.debug("HTTP HEAD not ok: {} ({})", url, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * POST application/json，用于 FlareSolverr 等 JSON-RPC 风格接口
      */
     public String postJson(String url, String jsonBody) {

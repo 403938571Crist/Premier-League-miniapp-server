@@ -9,7 +9,6 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 
 /**
@@ -24,19 +23,30 @@ public class DuplicateCheckService {
     private final NewsRepository newsRepository;
     
     /**
-     * 生成去重指纹
-     * 只用标题（归一化后）+ 发布日期（精确到小时），不含 sourceType
-     * 这样同一新闻被不同来源抓到时也能去重
+     * 生成去重指纹。
+     *
+     * 优先级：
+     *   1) 有 URL → MD5(url)          最可靠，同一文章 URL 不变
+     *   2) 无 URL → MD5(normalizedTitle + "|" + sourceType)
+     *              去掉 publishedAt，因为同一文章 feed 里的时间戳可能微调，
+     *              用时间会导致同一篇文章反复插入（复现的 "112 条重复" 问题）
      */
     public String generateFingerprint(News news) {
-        // 标题归一化：去除标点空格差异
-        String normalizedTitle = news.getTitle()
-                .replaceAll("[\\s\\p{Punct}\\uff01\\u3002\\uff0c\\u3001\\uff1b\\uff1a\\u201c\\u201d\\u2018\\u2019\\u3010\\u3011\\u300a\\u300b\\uff1f]", "")
-                .toLowerCase();
-        // 精确到小时，容忍同一新闻被不同来源在同一小时内抓到
-        String hourSlot = news.getSourcePublishedAt()
-                .format(DateTimeFormatter.ofPattern("yyyyMMddHH"));
-        String raw = normalizedTitle + "|" + hourSlot;
+        String raw;
+
+        String url = news.getUrl();
+        if (url != null && !url.isBlank()) {
+            // 去掉 URL 里的 UTM / RSS tracking 参数，只保留干净路径
+            String cleanUrl = url.replaceAll("[?&](utm_[^&]*|at_medium=[^&]*|at_campaign=[^&]*|at_custom[^&]*)", "")
+                                 .replaceAll("[?]$", "")
+                                 .trim();
+            raw = cleanUrl;
+        } else {
+            String normalizedTitle = news.getTitle()
+                    .replaceAll("[\\s\\p{Punct}\\uff01\\u3002\\uff0c\\u3001\\uff1b\\uff1a\\u201c\\u201d\\u2018\\u2019\\u3010\\u3011\\u300a\\u300b\\uff1f]", "")
+                    .toLowerCase();
+            raw = normalizedTitle + "|" + (news.getSourceType() != null ? news.getSourceType() : "");
+        }
 
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");

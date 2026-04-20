@@ -1,5 +1,6 @@
 package com.premierleague.server.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.premierleague.server.entity.Match;
 import com.premierleague.server.entity.Player;
 import com.premierleague.server.model.PlayerStat;
@@ -16,9 +17,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.text.Normalizer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -36,6 +40,24 @@ public class PlayerService {
     private final PulseliveProvider pulseliveProvider;
     private final FbrefProvider fbrefProvider;
     private final PlPhotoProvider plPhotoProvider;
+    private final SqlCacheService sqlCache;
+
+    private static final Duration SQL_CACHE_TTL_SCORERS = Duration.ofHours(2);
+    private static final TypeReference<List<PlayerStat>> PLAYER_STAT_LIST =
+            new TypeReference<>() {};
+    private static final Map<String, String> PLAYER_ZH = Map.ofEntries(
+            Map.entry("Eli Junior Kroupi", "克鲁皮"),
+            Map.entry("Junior Kroupi", "克鲁皮"),
+            Map.entry("Benjamin Šeško", "塞斯科"),
+            Map.entry("Benjamin Sesko", "塞斯科"),
+            Map.entry("Enzo Le Fée", "勒费"),
+            Map.entry("Enzo Le Fee", "勒费"),
+            Map.entry("Brenden Aaronson", "阿伦森"),
+            Map.entry("Jurrien Timber", "廷贝尔"),
+            Map.entry("Mohammed Kudus", "库杜斯"),
+            Map.entry("Xavi Simons", "哈维·西蒙斯"),
+            Map.entry("Granit Xhaka", "扎卡")
+    );
 
     /**
      * 获取球员详情
@@ -159,11 +181,21 @@ public class PlayerService {
      * 射手榜 - 按进球数降序
      * GET /api/players/top-scorers
      *
-     * 多级排序：goals DESC → assists DESC → playedMatches ASC（场均进球）
+     * 缓存层级：L1 Caffeine(10min) → L2 SQL(2h) → L3 实时 API
      */
     @Cacheable(value = "topScorers", key = "#limit")
     public List<PlayerStat> getTopScorers(int limit) {
         log.info("[PlayerService] Getting top scorers, limit={}", limit);
+
+        // L2: SQL cache
+        String cacheKey = "topScorers:" + limit;
+        Optional<List<PlayerStat>> sqlHit = sqlCache.get(cacheKey, PLAYER_STAT_LIST);
+        if (sqlHit.isPresent()) {
+            log.info("[PlayerService] topScorers SQL cache HIT, limit={}", limit);
+            return sqlHit.get();
+        }
+
+        // L3: 实时抓取
         List<PlayerStat> raw = fetchScorersWithFallback(limit);
         if (raw == null || raw.isEmpty()) {
             throw new DataUnavailableException("scorers",
@@ -178,20 +210,30 @@ public class PlayerService {
                 .limit(limit)
                 .toList();
 
-        return assignRanks(sorted);
+        List<PlayerStat> result = assignRanks(sorted);
+        sqlCache.set(cacheKey, result, SQL_CACHE_TTL_SCORERS);
+        return result;
     }
 
     /**
      * 助攻榜 - 按助攻数降序
      * GET /api/players/top-assists
      *
-     * 多级排序：assists DESC → goals DESC → playedMatches ASC
-     * 过滤掉 assists = 0 的球员（没意义上榜）
+     * 缓存层级：L1 Caffeine(10min) → L2 SQL(2h) → L3 实时 API
      */
     @Cacheable(value = "topAssists", key = "#limit")
     public List<PlayerStat> getTopAssists(int limit) {
         log.info("[PlayerService] Getting top assists, limit={}", limit);
-        // 优先走 api-football 专用 /players/topassists 端点；不通再沿用"多取 scorers 再本地按 assists 重排"的兜底
+
+        // L2: SQL cache
+        String cacheKey = "topAssists:" + limit;
+        Optional<List<PlayerStat>> sqlHit = sqlCache.get(cacheKey, PLAYER_STAT_LIST);
+        if (sqlHit.isPresent()) {
+            log.info("[PlayerService] topAssists SQL cache HIT, limit={}", limit);
+            return sqlHit.get();
+        }
+
+        // L3: 实时抓取
         List<PlayerStat> raw = fetchAssistsWithFallback(Math.max(limit * 2, 40));
         if (raw == null || raw.isEmpty()) {
             throw new DataUnavailableException("assists",
@@ -207,7 +249,9 @@ public class PlayerService {
                 .limit(limit)
                 .toList();
 
-        return assignRanks(sorted);
+        List<PlayerStat> result = assignRanks(sorted);
+        sqlCache.set(cacheKey, result, SQL_CACHE_TTL_SCORERS);
+        return result;
     }
 
     /**
@@ -295,15 +339,16 @@ public class PlayerService {
             if (!tieWithPrev) {
                 displayRank = i + 1;
             }
-            // photoUrl：源已经给就直接用（PulseliveProvider），否则回源 PL CDN 查
-            String photoUrl = s.photoUrl();
-            if (photoUrl == null) {
-                photoUrl = plPhotoProvider.findPhotoUrl(s.playerName());
+            String chineseName = s.chineseName();
+            if (chineseName == null || chineseName.isBlank()) {
+                chineseName = mapPlayerToChinese(s.playerName());
             }
+
+            String photoUrl = plPhotoProvider.findUsablePhotoUrl(s.playerName(), s.photoUrl());
 
             result.add(new PlayerStat(
                     displayRank,
-                    s.playerId(), s.playerName(), s.chineseName(), s.nationality(),
+                    s.playerId(), s.playerName(), chineseName, s.nationality(),
                     s.position(), s.chinesePosition(), s.shirtNumber(),
                     s.teamId(), s.teamName(), s.teamShortName(), s.teamChineseName(), s.teamCrest(),
                     s.goals(), s.assists(), s.penalties(), s.playedMatches(),
@@ -313,5 +358,21 @@ public class PlayerService {
             prevAssists = s.assists();
         }
         return result;
+    }
+
+    private String mapPlayerToChinese(String playerName) {
+        if (playerName == null || playerName.isBlank()) {
+            return null;
+        }
+        String hit = PLAYER_ZH.get(playerName);
+        if (hit != null) {
+            return hit;
+        }
+        return PLAYER_ZH.get(stripAccents(playerName));
+    }
+
+    private static String stripAccents(String s) {
+        String nfd = Normalizer.normalize(s, Normalizer.Form.NFD);
+        return nfd.replaceAll("\\p{M}", "");
     }
 }

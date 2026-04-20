@@ -86,6 +86,7 @@ scraper:
 
 # 抓取源配置
 app:
+  public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:8080}
   cors:
     allowed-origins:
       - "*"

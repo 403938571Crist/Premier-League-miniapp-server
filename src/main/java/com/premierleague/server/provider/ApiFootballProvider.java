@@ -53,7 +53,7 @@ public class ApiFootballProvider {
     /**
      * 射手榜 - /players/topscorers
      */
-    @Cacheable(value = "apiFootballScorers", key = "#root.target.season + '-' + #root.target.leagueId")
+    @Cacheable(value = "apiFootballScorers", key = "'scorers'")
     public List<PlayerStat> fetchScorers() {
         if (isDisabled()) {
             log.debug("[ApiFootball] No API key configured, skipping scorers");
@@ -68,7 +68,7 @@ public class ApiFootballProvider {
     /**
      * 助攻榜 - /players/topassists
      */
-    @Cacheable(value = "apiFootballAssists", key = "#root.target.season + '-' + #root.target.leagueId")
+    @Cacheable(value = "apiFootballAssists", key = "'assists'")
     public List<PlayerStat> fetchAssists() {
         if (isDisabled()) {
             log.debug("[ApiFootball] No API key configured, skipping assists");

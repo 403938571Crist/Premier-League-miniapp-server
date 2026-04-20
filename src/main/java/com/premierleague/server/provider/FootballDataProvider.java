@@ -20,7 +20,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -54,7 +54,6 @@ public class FootballDataProvider {
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ISO_DATE_TIME;
-    private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Shanghai");
 
     // 上游状态到内部状态映射
     private static final java.util.Map<String, String> STATUS_MAPPING = java.util.Map.of(
@@ -1000,7 +999,7 @@ public class FootballDataProvider {
     private LocalDateTime parseMatchDate(String utcDate) {
         try {
             return OffsetDateTime.parse(utcDate, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-                    .atZoneSameInstant(DISPLAY_ZONE)
+                    .withOffsetSameInstant(ZoneOffset.UTC)
                     .toLocalDateTime();
         } catch (Exception ignored) {
             try {

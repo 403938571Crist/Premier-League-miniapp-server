@@ -7,6 +7,9 @@ import com.premierleague.server.model.NewsArticle;
 import com.premierleague.server.model.NewsListItem;
 import com.premierleague.server.model.TransferNews;
 import com.premierleague.server.repository.NewsRepository;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.Path;
+import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheConfig;
@@ -14,30 +17,26 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/**
- * 资讯服务
- * 
- * 【重要】首页资讯流统一走服务端缓存结果，不实时硬抓
- * - 数据由定时任务抓取到 MySQL
- * - 查询时从 MySQL 读取，走 Caffeine 本地缓存
- * - 数据库为空时返回空结果（无 Mock 数据）
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 @CacheConfig(cacheNames = "news")
 public class NewsService {
 
+    private static final List<String> BLOCKED_SOURCE_TYPES = List.of("bilibili", "douyin");
     private static final Set<String> BLOCKED_NEWS_KEYWORDS = Set.of(
             "彩经",
             "竞彩",
@@ -46,7 +45,7 @@ public class NewsService {
             "盘口",
             "赔率",
             "让球",
-            "大小球",
+            "大小�?",
             "串关",
             "单关",
             "北单",
@@ -59,15 +58,13 @@ public class NewsService {
             "handicap",
             "tipster"
     );
-    
+    private static final int DEFAULT_PAGE = 1;
+    private static final int DEFAULT_PAGE_SIZE = 10;
+    private static final int MAX_PAGE_SIZE = 50;
+
     private final NewsRepository newsRepository;
-    
-    /**
-     * 获取资讯列表 - GET /api/news
-     * 
-     * 【缓存策略】缓存 5 分钟
-     * 首页资讯流不走实时抓取，只读数据库 + 缓存
-     */
+    private final NewsImageService newsImageService;
+
     @Cacheable(value = "newsList", key = "#page+'-'+#pageSize+'-'+#sourceType+'-'+#tag+'-'+#keyword")
     public PageResult<NewsListItem> getNewsList(
             int page,
@@ -76,68 +73,53 @@ public class NewsService {
             String tag,
             String keyword
     ) {
-        log.debug("[NewsService] Getting news list from DB: page={}, size={}", page, pageSize);
-        
-        Pageable pageable = PageRequest.of(page - 1, pageSize);
-        Page<News> newsPage;
-        
-        // 从数据库查询（不走实时抓取）
-        if (keyword != null && !keyword.isEmpty()) {
-            newsPage = newsRepository.searchByKeyword(keyword, pageable);
-        } else if (sourceType != null && !sourceType.isEmpty()) {
-            newsPage = newsRepository.findBySourceTypeOrderBySourcePublishedAtDesc(sourceType, pageable);
-        } else if (tag != null && !tag.isEmpty()) {
-            newsPage = newsRepository.findByTag(tag, pageable);
-        } else {
-            newsPage = newsRepository.findAllByOrderBySourcePublishedAtDesc(pageable);
-        }
-        
+        int safePage = Math.max(page, DEFAULT_PAGE);
+        int requestedPageSize = pageSize <= 0 ? DEFAULT_PAGE_SIZE : pageSize;
+        int safePageSize = Math.max(1, Math.min(requestedPageSize, MAX_PAGE_SIZE));
+
+        log.debug("[NewsService] Getting news list from DB: page={}, size={}", safePage, safePageSize);
+
+        Pageable pageable = PageRequest.of(
+                safePage - 1,
+                safePageSize,
+                Sort.by(Sort.Direction.DESC, "sourcePublishedAt")
+        );
+        Page<News> newsPage = newsRepository.findAll(visibleNewsSpec(sourceType, tag, keyword), pageable);
+
         List<NewsListItem> items = newsPage.getContent().stream()
-                .filter(this::isAllowedNews)
                 .map(this::convertToListItem)
                 .collect(Collectors.toList());
-        
+
         log.debug("[NewsService] Returning {} items from DB", items.size());
-        return PageResult.of(items, page, pageSize, newsPage.getTotalElements());
+        return PageResult.of(items, safePage, safePageSize, newsPage.getTotalElements());
     }
-    
-    /**
-     * 获取资讯详情 - GET /api/news/{id}
-     * 
-     * 【缓存策略】缓存 30 分钟
-     */
+
     @Cacheable(value = "newsDetail", key = "#id")
     public Optional<NewsArticle> getNewsDetail(String id) {
         log.debug("[NewsService] Getting news detail from DB: id={}", id);
-        
+
         return newsRepository.findById(id)
                 .filter(this::isAllowedNews)
                 .map(this::convertToArticle);
     }
-    
-    /**
-     * 获取转会快讯 - GET /api/news/transfers
-     * 
-     * 【缓存策略】缓存 2 分钟（更新频繁）
-     */
+
     @Cacheable(value = "transferNews", key = "#source+'-'+#teamId+'-'+#playerId")
     public List<TransferNews> getTransferNews(String source, Long teamId, Long playerId) {
         log.debug("[NewsService] Getting transfer news from DB");
-        
-        // 从数据库查询转会资讯
+
         List<News> transfers = newsRepository.findTransferNews("转会");
-        
+
         return transfers.stream()
                 .filter(item -> source == null || item.getSourceType().equals(source))
-                .filter(item -> teamId == null || 
-                        (item.getRelatedTeamIds() != null && item.getRelatedTeamIds().contains(teamId.toString())))
+                .filter(item -> teamId == null
+                        || (item.getRelatedTeamIds() != null && item.getRelatedTeamIds().contains(teamId.toString())))
+                .filter(item -> playerId == null
+                        || (item.getRelatedPlayerIds() != null && item.getRelatedPlayerIds().contains(playerId.toString())))
                 .filter(this::isAllowedNews)
                 .map(this::convertToTransferNews)
                 .collect(Collectors.toList());
     }
-    
-    // ========== 转换方法 ==========
-    
+
     private NewsListItem convertToListItem(News news) {
         return new NewsListItem(
                 news.getId(),
@@ -147,15 +129,16 @@ public class NewsService {
                 news.getSourceType(),
                 news.getMediaType(),
                 news.getSourcePublishedAt().toString(),
-                news.getCoverImage(),
+                newsImageService.resolveCoverImage(news.getId(), news.getCoverImage()),
                 news.getTags() != null ? Arrays.asList(news.getTags().split(",")) : List.of(),
                 news.getHotScore(),
                 news.getAuthor(),
                 news.getUrl()
         );
     }
-    
+
     private NewsArticle convertToArticle(News news) {
+        List<String> contentImages = extractContentImages(news.getContent(), news.getCoverImage());
         return new NewsArticle(
                 news.getId(),
                 news.getTitle(),
@@ -165,23 +148,24 @@ public class NewsService {
                 news.getMediaType(),
                 news.getSourcePublishedAt().toString(),
                 news.getAuthor(),
-                news.getCoverImage(),
+                newsImageService.resolveCoverImage(news.getId(), news.getCoverImage()),
                 news.getTags() != null ? Arrays.asList(news.getTags().split(",")) : List.of(),
-                news.getRelatedTeamIds() != null ? 
-                        Arrays.stream(news.getRelatedTeamIds().split(","))
-                                .map(Long::parseLong)
-                                .collect(Collectors.toList()) : List.of(),
-                news.getRelatedPlayerIds() != null ? 
-                        Arrays.stream(news.getRelatedPlayerIds().split(","))
-                                .map(Long::parseLong)
-                                .collect(Collectors.toList()) : List.of(),
+                news.getRelatedTeamIds() != null
+                        ? Arrays.stream(news.getRelatedTeamIds().split(","))
+                        .map(Long::parseLong)
+                        .collect(Collectors.toList()) : List.of(),
+                news.getRelatedPlayerIds() != null
+                        ? Arrays.stream(news.getRelatedPlayerIds().split(","))
+                        .map(Long::parseLong)
+                        .collect(Collectors.toList()) : List.of(),
                 news.getHotScore(),
                 news.getUrl(),
                 news.getSourceNote(),
-                parseBlocks(news.getContent())
+                newsImageService.mergeDetailImages(news.getCoverImage(), contentImages),
+                parseTextBlocks(news.getContent())
         );
     }
-    
+
     private TransferNews convertToTransferNews(News news) {
         return new TransferNews(
                 news.getId(),
@@ -190,32 +174,80 @@ public class NewsService {
                 news.getSource(),
                 news.getSourceType(),
                 news.getSourcePublishedAt().toString(),
-                news.getRelatedTeamIds() != null ? 
-                        Arrays.stream(news.getRelatedTeamIds().split(","))
-                                .map(Long::parseLong)
-                                .collect(Collectors.toList()) : List.of(),
-                news.getRelatedPlayerIds() != null ? 
-                        Arrays.stream(news.getRelatedPlayerIds().split(","))
-                                .map(Long::parseLong)
-                                .collect(Collectors.toList()) : List.of(),
+                news.getRelatedTeamIds() != null
+                        ? Arrays.stream(news.getRelatedTeamIds().split(","))
+                        .map(Long::parseLong)
+                        .collect(Collectors.toList()) : List.of(),
+                news.getRelatedPlayerIds() != null
+                        ? Arrays.stream(news.getRelatedPlayerIds().split(","))
+                        .map(Long::parseLong)
+                        .collect(Collectors.toList()) : List.of(),
                 news.getHotScore(),
                 news.getUrl()
         );
     }
-    
-    private List<ArticleBlock> parseBlocks(String content) {
+
+    private List<ArticleBlock> parseTextBlocks(String content) {
         if (content == null || content.isEmpty()) {
             return List.of();
         }
         return Arrays.stream(content.split("\n\n"))
                 .filter(p -> !p.trim().isEmpty())
-                .map(p -> p.startsWith("[IMG:") && p.endsWith("]")
-                        ? ArticleBlock.image(p.substring(5, p.length() - 1))
-                        : ArticleBlock.paragraph(p))
+                .filter(p -> !isImageBlock(p))
+                .map(ArticleBlock::paragraph)
                 .collect(Collectors.toList());
     }
 
+    private List<String> extractContentImages(String content, String coverImage) {
+        if (content == null || content.isEmpty()) {
+            return List.of();
+        }
+
+        String coverKey = imageIdentity(coverImage);
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> images = new ArrayList<>();
+        for (String block : content.split("\n\n")) {
+            String trimmed = block.trim();
+            if (!isImageBlock(trimmed)) {
+                continue;
+            }
+
+            String imageUrl = trimmed.substring(5, trimmed.length() - 1);
+            String imageKey = imageIdentity(imageUrl);
+            if (imageKey == null || imageKey.equals(coverKey) || !seen.add(imageKey)) {
+                continue;
+            }
+            images.add(imageUrl);
+        }
+        return images;
+    }
+
+    private boolean isImageBlock(String block) {
+        return block.startsWith("[IMG:") && block.endsWith("]");
+    }
+
+    private String imageIdentity(String imageUrl) {
+        if (imageUrl == null || imageUrl.isBlank()) {
+            return null;
+        }
+        String clean = imageUrl;
+        int queryIndex = clean.indexOf('?');
+        if (queryIndex >= 0) {
+            clean = clean.substring(0, queryIndex);
+        }
+        int slashIndex = clean.lastIndexOf('/');
+        return slashIndex >= 0 ? clean.substring(slashIndex + 1) : clean;
+    }
+
     private boolean isAllowedNews(News news) {
+        if (news == null) {
+            return false;
+        }
+
+        if (news.getSourceType() != null && BLOCKED_SOURCE_TYPES.contains(news.getSourceType().toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+
         return !containsBlockedKeyword(news.getTitle())
                 && !containsBlockedKeyword(news.getSummary())
                 && !containsBlockedKeyword(news.getTags())
@@ -230,5 +262,56 @@ public class NewsService {
 
         String normalized = value.toLowerCase(Locale.ROOT);
         return BLOCKED_NEWS_KEYWORDS.stream().anyMatch(normalized::contains);
+    }
+
+    private Specification<News> visibleNewsSpec(String sourceType, String tag, String keyword) {
+        String normalizedSourceType = normalizeParam(sourceType);
+        String normalizedTag = normalizeParam(tag);
+        String normalizedKeyword = normalizeParam(keyword);
+
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.not(root.get("sourceType").in(BLOCKED_SOURCE_TYPES)));
+
+            for (String blockedKeyword : BLOCKED_NEWS_KEYWORDS) {
+                String pattern = "%" + blockedKeyword.toLowerCase(Locale.ROOT) + "%";
+                predicates.add(notLikeIgnoreCase(cb, root.get("title"), pattern));
+                predicates.add(notLikeIgnoreCase(cb, root.get("summary"), pattern));
+                predicates.add(notLikeIgnoreCase(cb, root.get("tags"), pattern));
+                predicates.add(notLikeIgnoreCase(cb, root.get("sourceNote"), pattern));
+                predicates.add(notLikeIgnoreCase(cb, root.get("content"), pattern));
+            }
+
+            if (normalizedSourceType != null) {
+                predicates.add(cb.equal(cb.lower(root.get("sourceType")), normalizedSourceType.toLowerCase(Locale.ROOT)));
+            }
+
+            if (normalizedTag != null) {
+                predicates.add(cb.like(cb.lower(root.get("tags")), "%" + normalizedTag.toLowerCase(Locale.ROOT) + "%"));
+            }
+
+            if (normalizedKeyword != null) {
+                String likePattern = "%" + normalizedKeyword.toLowerCase(Locale.ROOT) + "%";
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("title")), likePattern),
+                        cb.like(cb.lower(root.get("summary")), likePattern)
+                ));
+            }
+
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+    private Predicate notLikeIgnoreCase(CriteriaBuilder cb, Path<String> path, String pattern) {
+        return cb.or(cb.isNull(path), cb.notLike(cb.lower(path), pattern));
+    }
+
+    private String normalizeParam(String value) {
+        if (value == null) {
+            return null;
+        }
+
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

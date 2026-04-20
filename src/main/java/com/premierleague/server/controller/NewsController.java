@@ -5,7 +5,9 @@ import com.premierleague.server.dto.PageResult;
 import com.premierleague.server.model.NewsArticle;
 import com.premierleague.server.model.NewsListItem;
 import com.premierleague.server.model.TransferNews;
+import com.premierleague.server.service.NewsImageService;
 import com.premierleague.server.service.NewsService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -21,9 +23,11 @@ import java.util.List;
 public class NewsController {
     
     private final NewsService newsService;
+    private final NewsImageService newsImageService;
     
-    public NewsController(NewsService newsService) {
+    public NewsController(NewsService newsService, NewsImageService newsImageService) {
         this.newsService = newsService;
+        this.newsImageService = newsImageService;
     }
     
     /**
@@ -51,6 +55,11 @@ public class NewsController {
         return newsService.getNewsDetail(id)
                 .map(ApiResponse::ok)
                 .orElse(ApiResponse.notFound("news"));
+    }
+
+    @GetMapping("/{id}/cover-preview")
+    public ResponseEntity<byte[]> getNewsCoverPreview(@PathVariable String id) {
+        return newsImageService.getCoverPreview(id);
     }
     
     /**

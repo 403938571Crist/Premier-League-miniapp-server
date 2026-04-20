@@ -16,6 +16,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,7 @@ import java.util.stream.Collectors;
 public class MatchService {
 
     private static final ZoneId APP_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final ZoneOffset STORAGE_ZONE = ZoneOffset.UTC;
     private static final int REFRESH_LOOKBACK_DAYS = 1;
     private static final int REFRESH_LOOKAHEAD_DAYS = 7;
 
@@ -51,8 +53,8 @@ public class MatchService {
         LocalDate today = LocalDate.now(APP_ZONE);
         refreshMatchesIfNeeded(today, today);
         List<Match> matches = matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(
-            today.atStartOfDay(),
-            today.atTime(LocalTime.MAX)
+            toStorageStart(today),
+            toStorageEnd(today)
         );
         
         // 2. 如果数据库没有，从 API 获取
@@ -97,8 +99,8 @@ public class MatchService {
 
         refreshMatchesIfNeeded(date, date);
 
-        LocalDateTime start = date.atStartOfDay();
-        LocalDateTime end = date.atTime(LocalTime.MAX);
+        LocalDateTime start = toStorageStart(date);
+        LocalDateTime end = toStorageEnd(date);
         
         // 1. 先查数据库
         List<Match> matches = matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(start, end);
@@ -203,7 +205,10 @@ public class MatchService {
     @Cacheable(value = "matchesByDateRange", key = "#start + '-' + #end")
     public List<Match> getMatchesByDateRange(LocalDateTime start, LocalDateTime end) {
         refreshMatchesIfNeeded(start.toLocalDate(), end.toLocalDate());
-        return matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(start, end);
+        return matchRepository.findByMatchDateBetweenOrderByMatchDateAsc(
+                toStorage(start),
+                toStorage(end)
+        );
     }
 
     /**
@@ -280,7 +285,7 @@ public class MatchService {
         // 按日期分组
         return matches.stream()
                 .collect(Collectors.groupingBy(
-                        m -> m.getMatchDate().toLocalDate().toString()
+                        m -> toAppTime(m.getMatchDate()).toLocalDate().toString()
                 ));
     }
 
@@ -300,9 +305,34 @@ public class MatchService {
             return;
         }
 
-        for (LocalDate date = refreshStart; !date.isAfter(refreshEnd); date = date.plusDays(1)) {
+        LocalDate fetchStart = toStorageStart(refreshStart).toLocalDate();
+        LocalDate fetchEnd = toStorageEnd(refreshEnd).toLocalDate();
+
+        for (LocalDate date = fetchStart; !date.isAfter(fetchEnd); date = date.plusDays(1)) {
             refreshMatchesForDate(date);
         }
+    }
+
+    private LocalDateTime toStorageStart(LocalDate appDate) {
+        return toStorage(appDate.atStartOfDay());
+    }
+
+    private LocalDateTime toStorageEnd(LocalDate appDate) {
+        return toStorage(appDate.atTime(LocalTime.MAX));
+    }
+
+    private LocalDateTime toStorage(LocalDateTime appDateTime) {
+        return appDateTime
+                .atZone(APP_ZONE)
+                .withZoneSameInstant(STORAGE_ZONE)
+                .toLocalDateTime();
+    }
+
+    private LocalDateTime toAppTime(LocalDateTime storageDateTime) {
+        return storageDateTime
+                .atOffset(STORAGE_ZONE)
+                .atZoneSameInstant(APP_ZONE)
+                .toLocalDateTime();
     }
 
     private void refreshMatchesForDate(LocalDate date) {

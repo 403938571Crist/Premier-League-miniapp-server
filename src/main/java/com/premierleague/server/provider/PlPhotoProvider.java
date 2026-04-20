@@ -43,8 +43,21 @@ public class PlPhotoProvider {
             "https://footballapi.pulselive.com/search/PremierLeague"
                     + "?terms=%s&type=player&size=3&start=0&fullObjectResponse=true";
 
-    private static final String PHOTO_URL_TMPL =
+    private static final String LEGACY_PHOTO_URL_TMPL =
             "https://resources.premierleague.com/premierleague/photos/players/250x250/%s.png";
+
+    private static final String CURRENT_PHOTO_URL_TMPL =
+            "https://resources.premierleague.com/premierleague25/photos/players/110x140/%s.png";
+
+    private static final String CURRENT_SMALL_PHOTO_URL_TMPL =
+            "https://resources.premierleague.com/premierleague25/photos/players/40x40/%s.png";
+
+    private static final Map<String, String> IMAGE_HEADERS = Map.of(
+            "Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Referer", "https://www.premierleague.com/",
+            "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    );
 
     private final HttpClientUtil http;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -89,6 +102,25 @@ public class PlPhotoProvider {
         return photo;
     }
 
+    public String findUsablePhotoUrl(String playerName, String candidateUrl) {
+        if (candidateUrl != null && !candidateUrl.isBlank()) {
+            String url = candidateUrl.trim();
+            if (http.headOk(url, IMAGE_HEADERS)) {
+                return url;
+            }
+
+            String opta = extractOptaFromPhotoUrl(url);
+            if (opta != null) {
+                String resolved = resolvePhotoUrl(opta);
+                if (resolved != null) {
+                    return resolved;
+                }
+            }
+        }
+
+        return findPhotoUrl(playerName);
+    }
+
     private String searchByName(String name) {
         try {
             String url = String.format(SEARCH_URL,
@@ -113,12 +145,53 @@ public class PlPhotoProvider {
             String opta = picked.path("response").path("altIds").path("opta").asText(null);
             if (opta == null || opta.isBlank()) return null;
 
-            log.debug("[PlPhoto] {} → {}", name, opta);
-            return String.format(PHOTO_URL_TMPL, opta);
+            String photoUrl = resolvePhotoUrl(opta);
+            log.debug("[PlPhoto] {} -> {} -> {}", name, opta, photoUrl);
+            return photoUrl;
         } catch (Exception e) {
             log.debug("[PlPhoto] searchByName failed for {}: {}", name, e.getMessage());
             return null;
         }
+    }
+
+    private String resolvePhotoUrl(String opta) {
+        String legacyUrl = String.format(LEGACY_PHOTO_URL_TMPL, opta);
+        if (http.headOk(legacyUrl, IMAGE_HEADERS)) {
+            return legacyUrl;
+        }
+
+        String numericOpta = opta.startsWith("p") ? opta.substring(1) : opta;
+        String currentUrl = String.format(CURRENT_PHOTO_URL_TMPL, numericOpta);
+        if (http.headOk(currentUrl, IMAGE_HEADERS)) {
+            return currentUrl;
+        }
+
+        String smallUrl = String.format(CURRENT_SMALL_PHOTO_URL_TMPL, numericOpta);
+        if (http.headOk(smallUrl, IMAGE_HEADERS)) {
+            return smallUrl;
+        }
+
+        return null;
+    }
+
+    private String extractOptaFromPhotoUrl(String url) {
+        if (!url.contains("resources.premierleague.com")
+                && !url.contains("resources.premierleague.pulselive.com")) {
+            return null;
+        }
+
+        int slash = url.lastIndexOf('/');
+        String fileName = slash >= 0 ? url.substring(slash + 1) : url;
+        int query = fileName.indexOf('?');
+        if (query >= 0) {
+            fileName = fileName.substring(0, query);
+        }
+        int dot = fileName.indexOf('.');
+        String id = dot >= 0 ? fileName.substring(0, dot) : fileName;
+        if (!id.matches("p?\\d+")) {
+            return null;
+        }
+        return id.startsWith("p") ? id : "p" + id;
     }
 
     /** "João" → "Joao"，"Højlund" → "Hojlund" */

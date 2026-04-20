@@ -194,6 +194,18 @@ public class UnderstatProvider {
 
     private static final Map<String, String> PLAYER_ZH = new HashMap<>();
     static {
+        PLAYER_ZH.put("Eli Junior Kroupi", "克鲁皮");
+        PLAYER_ZH.put("Junior Kroupi", "克鲁皮");
+        PLAYER_ZH.put("Benjamin Šeško", "塞斯科");
+        PLAYER_ZH.put("Benjamin Sesko", "塞斯科");
+        PLAYER_ZH.put("Enzo Le Fée", "勒费");
+        PLAYER_ZH.put("Enzo Le Fee", "勒费");
+        PLAYER_ZH.put("Brenden Aaronson", "阿伦森");
+        PLAYER_ZH.put("Jurriën Timber", "廷贝尔");
+        PLAYER_ZH.put("Jurrien Timber", "廷贝尔");
+        PLAYER_ZH.put("Mohammed Kudus", "库杜斯");
+        PLAYER_ZH.put("Xavi Simons", "哈维·西蒙斯");
+        PLAYER_ZH.put("Granit Xhaka", "扎卡");
         // 射手榜/助攻榜 热门球员（以本赛季数据为准）
         PLAYER_ZH.put("Erling Haaland", "哈兰德");
         PLAYER_ZH.put("Mohamed Salah", "萨拉赫");

@@ -10,6 +10,7 @@ import com.premierleague.server.repository.NewsRepository;
 import com.premierleague.server.service.NewsFetchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.CacheManager;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
 
@@ -34,6 +35,7 @@ public class AdminController {
     private final NewsRepository newsRepository;
     private final DongqiudiProvider dongqiudiProvider;
     private final List<NewsProvider> providers;
+    private final CacheManager cacheManager;
     
     /**
      * 手动触发指定频率的抓取任务
@@ -83,14 +85,18 @@ public class AdminController {
         
         try {
             newsFetchService.fetchFromProvider(provider, provider.getFrequencyLevel());
-            
+
+            // 抓取成功后立刻清 newsList 缓存，保证 /api/news 能看到新数据
+            var cache = cacheManager.getCache("newsList");
+            if (cache != null) cache.clear();
+
             Map<String, Object> result = new HashMap<>();
             result.put("sourceType", sourceType);
             result.put("sourceName", provider.getSourceName());
             result.put("triggeredAt", LocalDateTime.now().toString());
             result.put("durationMs", System.currentTimeMillis() - startTime);
             result.put("status", "success");
-            
+
             return ApiResponse.ok(result);
         } catch (Exception e) {
             log.error("[Admin] Manual fetch failed", e);
@@ -230,6 +236,25 @@ public class AdminController {
                 .compile("[?&]articleId=(\\d+)").matcher(url);
         if (m2.find()) return m2.group(1);
         return null;
+    }
+
+    /**
+     * 清空所有资讯相关缓存（newsList / newsDetail / transferNews）
+     * POST /api/admin/cache/evict
+     * 抓取完新数据后调用，让 /api/news 立刻反映最新内容
+     */
+    @PostMapping("/cache/evict")
+    public ApiResponse<Map<String, Object>> evictNewsCache() {
+        String[] caches = {"newsList", "newsDetail", "transferNews", "socialPlayers"};
+        for (String c : caches) {
+            var cache = cacheManager.getCache(c);
+            if (cache != null) cache.clear();
+        }
+        Map<String, Object> r = new HashMap<>();
+        r.put("evicted", caches);
+        r.put("at", LocalDateTime.now().toString());
+        log.info("[Admin] News cache evicted: {}", java.util.Arrays.toString(caches));
+        return ApiResponse.ok(r);
     }
 
     /**

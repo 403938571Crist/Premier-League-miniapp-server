@@ -1,9 +1,12 @@
 package com.premierleague.server.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.premierleague.server.entity.Match;
 import com.premierleague.server.entity.Player;
 import com.premierleague.server.entity.Team;
+import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.provider.FootballDataProvider;
+import com.premierleague.server.provider.PulseliveProvider;
 import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
 import com.premierleague.server.repository.TeamRepository;
@@ -12,9 +15,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -31,6 +38,11 @@ public class TeamService {
     private final PlayerRepository playerRepository;
     private final MatchRepository matchRepository;
     private final FootballDataProvider footballDataProvider;
+    private final PulseliveProvider pulseliveProvider;
+    private final SqlCacheService sqlCache;
+
+    private static final Duration SQL_CACHE_TTL_STANDINGS = Duration.ofMinutes(30);
+    private static final TypeReference<List<Team>> TEAM_LIST = new TypeReference<>() {};
 
     /**
      * 获取积分榜
@@ -41,19 +53,28 @@ public class TeamService {
     @Cacheable(value = "standings", key = "'all'")
     public List<Team> getStandings() {
         log.info("[TeamService] Getting standings");
-        
-        // 1. 先查数据库
+
+        // 1. DB is primary storage — if ≥20 teams, return directly
         List<Team> standings = teamRepository.findStandings();
-        
-        // 2. 如果数据库中没有或数据不足 20 队，从 API 获取
-        if (standings.size() < 20) {
-            log.info("[TeamService] Not enough standings in DB ({} teams), fetching from API", standings.size());
-            List<Team> apiStandings = footballDataProvider.fetchStandings();
-            if (!apiStandings.isEmpty()) {
-                standings = saveTeams(apiStandings);
-            }
+        if (standings.size() >= 20) {
+            return standings;
         }
-        
+
+        // 2. L2: SQL cache
+        Optional<List<Team>> sqlHit = sqlCache.get("standings:all", TEAM_LIST);
+        if (sqlHit.isPresent()) {
+            log.info("[TeamService] standings SQL cache HIT");
+            return sqlHit.get();
+        }
+
+        // 3. L3: real-time API (rate-limited)
+        log.info("[TeamService] Not enough standings in DB ({} teams), fetching from API", standings.size());
+        List<Team> apiStandings = footballDataProvider.fetchStandings();
+        if (!apiStandings.isEmpty()) {
+            standings = saveTeams(apiStandings);
+            sqlCache.set("standings:all", standings, SQL_CACHE_TTL_STANDINGS);
+        }
+
         return standings;
     }
 
@@ -161,47 +182,221 @@ public class TeamService {
         Map<String, Object> squad = new HashMap<>();
         
         // 1. 先查数据库
-        List<Player> allPlayers = playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(teamId);
+        Optional<Team> teamOpt = getTeamById(teamId);
+        List<Player> allPlayers = findPlayersForTeam(teamId, teamOpt);
         
         // 2. 如果数据库中没有，从 API 获取
-        if (allPlayers.isEmpty()) {
+        if (allPlayers.isEmpty() && teamOpt.isPresent()) {
             log.info("[TeamService] No squad in DB for team {}, fetching from API", teamId);
             
             // 获取球队 API ID
-            Optional<Team> teamOpt = getTeamById(teamId);
-            if (teamOpt.isPresent()) {
+            if (teamOpt.get().getApiId() != null) {
                 Long apiId = teamOpt.get().getApiId();
+                Long storageTeamId = teamOpt.get().getId() != null ? teamOpt.get().getId() : teamId;
                 List<Player> apiPlayers = footballDataProvider.fetchTeamSquad(apiId);
                 if (!apiPlayers.isEmpty()) {
                     // 设置球队 ID
-                    apiPlayers.forEach(p -> p.setTeamId(teamId));
-                    allPlayers = savePlayers(apiPlayers);
+                    apiPlayers.forEach(p -> p.setTeamId(storageTeamId));
+                    savePlayers(apiPlayers);
+                    allPlayers = findPlayersForTeam(teamId, teamOpt);
                 }
             }
         }
         
         // 按位置分组
-        List<Player> goalkeepers = allPlayers.stream()
-                .filter(p -> "Goalkeeper".equals(p.getPosition()))
-                .collect(Collectors.toList());
-        List<Player> defenders = allPlayers.stream()
-                .filter(p -> "Defender".equals(p.getPosition()))
-                .collect(Collectors.toList());
-        List<Player> midfielders = allPlayers.stream()
-                .filter(p -> "Midfielder".equals(p.getPosition()))
-                .collect(Collectors.toList());
-        List<Player> attackers = allPlayers.stream()
-                .filter(p -> "Attacker".equals(p.getPosition()))
+        if (allPlayers.isEmpty() && teamOpt.isPresent()) {
+            Long storageTeamId = teamOpt.get().getId() != null ? teamOpt.get().getId() : teamId;
+            allPlayers = fetchSquadFromPulseliveLeaderboard(teamOpt.get(), storageTeamId);
+        }
+
+        List<Player> goalkeepers = playersInGroup(allPlayers, "Goalkeeper");
+        List<Player> defenders = playersInGroup(allPlayers, "Defender");
+        List<Player> midfielders = playersInGroup(allPlayers, "Midfielder");
+        List<Player> attackers = playersInGroup(allPlayers, "Attacker");
+        List<Player> others = allPlayers.stream()
+                .filter(p -> positionGroup(p.getPosition()).isEmpty())
+                .sorted(this::comparePlayers)
                 .collect(Collectors.toList());
         
         squad.put("goalkeepers", goalkeepers);
         squad.put("defenders", defenders);
         squad.put("midfielders", midfielders);
         squad.put("attackers", attackers);
+        squad.put("forwards", attackers);
+        squad.put("others", others);
         squad.put("all", allPlayers);
         squad.put("totalCount", allPlayers.size());
         
         return squad;
+    }
+
+    private List<Player> findPlayersForTeam(Long requestedTeamId, Optional<Team> teamOpt) {
+        Map<String, Player> merged = new LinkedHashMap<>();
+        addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(requestedTeamId));
+        if (teamOpt.isPresent()) {
+            Team team = teamOpt.get();
+            if (team.getId() != null && !team.getId().equals(requestedTeamId)) {
+                addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(team.getId()));
+            }
+            if (team.getApiId() != null && !team.getApiId().equals(requestedTeamId)) {
+                addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(team.getApiId()));
+            }
+        }
+        return merged.values().stream()
+                .sorted(this::comparePlayers)
+                .collect(Collectors.toList());
+    }
+
+    private void addPlayers(Map<String, Player> merged, List<Player> players) {
+        for (Player player : players) {
+            merged.putIfAbsent(playerIdentity(player), player);
+        }
+    }
+
+    private String playerIdentity(Player player) {
+        if (player.getApiId() != null) {
+            return "api:" + player.getApiId();
+        }
+        if (player.getId() != null) {
+            return "db:" + player.getId();
+        }
+        return "name:" + player.getName();
+    }
+
+    private List<Player> fetchSquadFromPulseliveLeaderboard(Team team, Long storageTeamId) {
+        try {
+            List<PlayerStat> stats = pulseliveProvider.fetchScorers();
+            if (stats == null || stats.isEmpty()) {
+                return List.of();
+            }
+            return stats.stream()
+                    .filter(stat -> isSameTeam(stat, team))
+                    .map(stat -> toPlayer(stat, storageTeamId))
+                    .filter(player -> player.getName() != null && !player.getName().isBlank())
+                    .sorted(this::comparePlayers)
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            log.warn("[TeamService] Pulselive squad fallback failed for {}: {}", team.getName(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    private boolean isSameTeam(PlayerStat stat, Team team) {
+        String teamKey = canonicalTeamKey(team.getName());
+        String shortKey = canonicalTeamKey(team.getShortName());
+        String statTeamKey = canonicalTeamKey(stat.teamName());
+        String statShortKey = canonicalTeamKey(stat.teamShortName());
+
+        return isMatchingTeamKey(teamKey, statTeamKey)
+                || isMatchingTeamKey(teamKey, statShortKey)
+                || isMatchingTeamKey(shortKey, statTeamKey)
+                || isMatchingTeamKey(shortKey, statShortKey);
+    }
+
+    private boolean isMatchingTeamKey(String left, String right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return false;
+        }
+        if (left.equals(right)) {
+            return true;
+        }
+        return left.length() > 6 && right.length() > 6 && (left.contains(right) || right.contains(left));
+    }
+
+    private String canonicalTeamKey(String value) {
+        String key = normalizeKey(value);
+        return switch (key) {
+            case "manunited", "manutd" -> "manchesterunited";
+            case "mancity" -> "manchestercity";
+            case "spurs" -> "tottenhamhotspur";
+            case "wolves" -> "wolverhamptonwanderers";
+            case "nottmforest" -> "nottinghamforest";
+            case "newcastle" -> "newcastleunited";
+            case "westham" -> "westhamunited";
+            case "brightonhovealbion" -> "brightonandhovealbion";
+            default -> key;
+        };
+    }
+
+    private String normalizeKey(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT)
+                .replace("&", "and")
+                .replace("football club", "")
+                .replace("afc", "")
+                .replace("fc", "")
+                .replaceAll("[^a-z0-9]", "");
+    }
+
+    private Player toPlayer(PlayerStat stat, Long teamId) {
+        Player player = new Player();
+        player.setApiId(stat.playerId());
+        player.setTeamId(teamId);
+        player.setName(stat.playerName());
+        player.setChineseName(stat.chineseName());
+        player.setNationality(stat.nationality());
+        player.setPosition(stat.position());
+        player.setChinesePosition(stat.chinesePosition());
+        player.setShirtNumber(stat.shirtNumber() == null ? null : String.valueOf(stat.shirtNumber()));
+        player.setPhotoUrl(stat.photoUrl());
+        return player;
+    }
+
+    private List<Player> playersInGroup(List<Player> allPlayers, String group) {
+        return allPlayers.stream()
+                .filter(p -> group.equals(positionGroup(p.getPosition())))
+                .sorted(this::comparePlayers)
+                .collect(Collectors.toList());
+    }
+
+    private String positionGroup(String position) {
+        if (position == null || position.isBlank()) {
+            return "";
+        }
+
+        String value = position.toLowerCase(Locale.ROOT).replace('-', ' ').trim();
+        if (value.equals("g") || value.equals("gk") || value.contains("goalkeeper") || value.contains("keeper")) {
+            return "Goalkeeper";
+        }
+        if (value.equals("d") || value.equals("df") || value.equals("cb") || value.equals("lb")
+                || value.equals("rb") || value.equals("lwb") || value.equals("rwb")
+                || value.contains("defender") || value.contains("defence") || value.contains("defense")
+                || value.contains("back") || value.contains("sweeper")) {
+            return "Defender";
+        }
+        if (value.equals("m") || value.equals("mf") || value.equals("cm") || value.equals("dm")
+                || value.equals("am") || value.equals("lm") || value.equals("rm")
+                || value.contains("midfield")) {
+            return "Midfielder";
+        }
+        if (value.equals("f") || value.equals("fw") || value.equals("cf") || value.equals("st")
+                || value.equals("lw") || value.equals("rw")
+                || value.contains("attacker") || value.contains("attack") || value.contains("forward")
+                || value.contains("offence") || value.contains("offense")
+                || value.contains("striker") || value.contains("winger")) {
+            return "Attacker";
+        }
+        return "";
+    }
+
+    private int comparePlayers(Player left, Player right) {
+        return Comparator
+                .comparingInt((Player p) -> shirtNumberSortValue(p.getShirtNumber()))
+                .thenComparing(Player::getName, Comparator.nullsLast(String::compareToIgnoreCase))
+                .compare(left, right);
+    }
+
+    private int shirtNumberSortValue(String shirtNumber) {
+        if (shirtNumber == null || shirtNumber.isBlank()) {
+            return Integer.MAX_VALUE;
+        }
+        try {
+            return Integer.parseInt(shirtNumber.replaceAll("\\D", ""));
+        } catch (NumberFormatException e) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     /**

@@ -26,6 +26,7 @@ public record NewsArticle(
         String sourceNote,
         
         // 详情页特有
+        List<String> contentImages,
         List<ArticleBlock> blocks
 ) {
     /**
