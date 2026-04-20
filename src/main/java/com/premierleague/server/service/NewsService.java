@@ -38,21 +38,21 @@ public class NewsService {
 
     private static final List<String> BLOCKED_SOURCE_TYPES = List.of("bilibili", "douyin");
     private static final Set<String> BLOCKED_NEWS_KEYWORDS = Set.of(
-            "彩经",
-            "竞彩",
-            "足彩",
-            "博彩",
-            "盘口",
-            "赔率",
-            "让球",
-            "大小�?",
-            "串关",
-            "单关",
-            "北单",
-            "稳胆",
-            "水位",
-            "指数",
-            "推介",
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
             "betting",
             "odds",
             "handicap",

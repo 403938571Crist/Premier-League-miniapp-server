@@ -8,18 +8,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-/**
- * 全局异常处理
- */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    /**
-     * 上游数据源全部失败 → 503 + 语义化 message
-     * 前端据此展示"暂时无法获取"+下拉重试，而不是空表。
-     */
     @ExceptionHandler(DataUnavailableException.class)
     public ResponseEntity<ApiResponse<Void>> handleDataUnavailable(DataUnavailableException e) {
         logger.warn("[DataUnavailable] resource={} msg={}", e.getResource(), e.getMessage());
@@ -30,14 +23,20 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
     }
 
-    @ExceptionHandler(Exception.class)
-    public ApiResponse<Void> handleException(Exception e) {
-        logger.error("Unexpected error: ", e);
-        return ApiResponse.error(500, "Internal server error: " + e.getMessage());
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.badRequest(e.getMessage()));
     }
 
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ApiResponse<Void> handleIllegalArgument(IllegalArgumentException e) {
-        return ApiResponse.badRequest(e.getMessage());
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalState(IllegalStateException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.conflict(e.getMessage()));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
+        logger.error("Unexpected error: ", e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error(500, "Internal server error: " + e.getMessage()));
     }
 }

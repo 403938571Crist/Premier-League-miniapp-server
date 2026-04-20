@@ -227,3 +227,41 @@ INSERT INTO players (api_id, team_id, name, chinese_name, photo_url, shirt_numbe
 (13, 66, 'Marcus Rashford', '拉什福德', NULL, '10', 'Attacker', '前锋', 'England', '1997-10-31', 185, 70, 'Right'),
 (14, 66, 'Rasmus Højlund', '霍伊伦', NULL, '9', 'Attacker', '前锋', 'Denmark', '2003-02-04', 191, 79, 'Left'),
 (15, 66, 'Alejandro Garnacho', '加纳乔', NULL, '17', 'Attacker', '前锋', 'Argentina', '2004-07-01', 180, 71, 'Right');
+
+-- ============================================
+-- App users / sessions / follows
+-- ============================================
+CREATE TABLE IF NOT EXISTS app_users (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    display_name VARCHAR(100) NULL,
+    avatar_url VARCHAR(500) NULL,
+    guest TINYINT(1) NOT NULL DEFAULT 1,
+    external_open_id VARCHAR(100) NULL,
+    auth_provider VARCHAR(32) NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_app_user_external_open_id (external_open_id),
+    INDEX idx_app_user_display_name (display_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    token VARCHAR(64) PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    device_id VARCHAR(64) NULL,
+    expires_at DATETIME NOT NULL,
+    last_accessed_at DATETIME NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_user_session_user_id (user_id),
+    INDEX idx_user_session_expires_at (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS followed_teams (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    team_id BIGINT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_followed_team_user_team (user_id, team_id),
+    INDEX idx_followed_team_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
