@@ -24,6 +24,8 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 
@@ -54,6 +56,7 @@ public class FootballDataProvider {
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ISO_DATE_TIME;
+    private static final Map<String, String> TEAM_NAME_CN_MAP = buildTeamNameChineseMap();
 
     // 上游状态到内部状态映射
     private static final java.util.Map<String, String> STATUS_MAPPING = java.util.Map.of(
@@ -655,7 +658,7 @@ public class FootballDataProvider {
                         t.path("id").asLong(),
                         t.path("name").asText(""),
                         teamShortName,
-                        getChineseTeamName(teamShortName),
+                        resolveChineseTeamName(teamShortName, t.path("name").asText("")),
                         t.path("crest").asText(""),
                         row.path("goals").isNull() ? 0 : row.path("goals").asInt(0),
                         row.path("assists").isNull() ? 0 : row.path("assists").asInt(0),
@@ -736,14 +739,20 @@ public class FootballDataProvider {
             match.setHomeTeamId(homeTeam.path("id").asLong());
             match.setHomeTeamName(homeTeam.path("name").asText());
             match.setHomeTeamCrest(homeTeam.path("crest").asText());
-            match.setHomeTeamChineseName(getChineseTeamName(homeTeam.path("shortName").asText()));
+            match.setHomeTeamChineseName(resolveChineseTeamName(
+                    homeTeam.path("shortName").asText(),
+                    homeTeam.path("name").asText()
+            ));
             
             // 客队
             JsonNode awayTeam = node.path("awayTeam");
             match.setAwayTeamId(awayTeam.path("id").asLong());
             match.setAwayTeamName(awayTeam.path("name").asText());
             match.setAwayTeamCrest(awayTeam.path("crest").asText());
-            match.setAwayTeamChineseName(getChineseTeamName(awayTeam.path("shortName").asText()));
+            match.setAwayTeamChineseName(resolveChineseTeamName(
+                    awayTeam.path("shortName").asText(),
+                    awayTeam.path("name").asText()
+            ));
             
             // 比分
             JsonNode score = node.path("score");
@@ -809,11 +818,13 @@ public class FootballDataProvider {
             Team team = new Team();
             
             JsonNode teamNode = row.path("team");
+            String teamName = teamNode.path("name").asText();
+            String teamShortName = teamNode.path("shortName").asText();
             team.setApiId(teamNode.path("id").asLong());
-            team.setName(teamNode.path("name").asText());
-            team.setShortName(teamNode.path("shortName").asText());
+            team.setName(teamName);
+            team.setShortName(teamShortName);
             team.setCrestUrl(teamNode.path("crest").asText());
-            team.setChineseName(getChineseTeamName(teamNode.path("shortName").asText()));
+            team.setChineseName(resolveChineseTeamName(teamShortName, teamName));
             
             // 排名数据
             team.setPosition(row.path("position").asInt());
@@ -840,11 +851,13 @@ public class FootballDataProvider {
         try {
             JsonNode node = objectMapper.readTree(json);
             
+            String teamName = node.path("name").asText();
+            String teamShortName = node.path("shortName").asText();
             Team team = new Team();
             team.setApiId(node.path("id").asLong());
-            team.setName(node.path("name").asText());
-            team.setShortName(node.path("shortName").asText());
-            team.setChineseName(getChineseTeamName(node.path("shortName").asText()));
+            team.setName(teamName);
+            team.setShortName(teamShortName);
+            team.setChineseName(resolveChineseTeamName(teamShortName, teamName));
             team.setCrestUrl(node.path("crest").asText());
             team.setVenue(node.path("venue").asText());
             team.setFounded(node.path("founded").asInt());
@@ -943,45 +956,113 @@ public class FootballDataProvider {
     /**
      * 获取球队中文名
      */
-    private String getChineseTeamName(String shortName) {
-        // 英超球队中文名映射。注意 key 必须匹配 football-data.org 实际返回的 shortName，
-        // 比如 "Brighton Hove"（不是 "Brighton"）、"Leeds United"（不是 "Leeds"）、
-        // "Wolverhampton"（不是 "Wolves"），旧映射没覆盖这三个会让比赛卡回退到英文名。
-        java.util.Map<String, String> nameMap = new java.util.HashMap<>();
-        nameMap.put("Arsenal", "阿森纳");
-        nameMap.put("Aston Villa", "阿斯顿维拉");
-        nameMap.put("Brentford", "布伦特福德");
-        nameMap.put("Brighton", "布莱顿");
-        nameMap.put("Brighton Hove", "布莱顿");
-        nameMap.put("Burnley", "伯恩利");
-        nameMap.put("Chelsea", "切尔西");
-        nameMap.put("Crystal Palace", "水晶宫");
-        nameMap.put("Everton", "埃弗顿");
-        nameMap.put("Fulham", "富勒姆");
-        nameMap.put("Leeds United", "利兹联");
-        nameMap.put("Liverpool", "利物浦");
-        nameMap.put("Man City", "曼城");
-        nameMap.put("Man United", "曼联");
-        nameMap.put("Newcastle", "纽卡斯尔联");
-        nameMap.put("Nottingham", "诺丁汉森林");
-        nameMap.put("Nottingham Forest", "诺丁汉森林");
-        nameMap.put("Sunderland", "桑德兰");
-        nameMap.put("Tottenham", "热刺");
-        nameMap.put("West Ham", "西汉姆联");
-        nameMap.put("Wolves", "狼队");
-        nameMap.put("Wolverhampton", "狼队");
-        nameMap.put("Bournemouth", "伯恩茅斯");
-        nameMap.put("Sheffield United", "谢菲尔德联");
-        nameMap.put("Luton Town", "卢顿");
-        nameMap.put("Leicester City", "莱斯特城");
-        nameMap.put("Ipswich Town", "伊普斯维奇");
-        nameMap.put("Southampton", "南安普顿");
+    private String resolveChineseTeamName(String shortName, String fullName) {
+        String mapped = mapTeamNameToChinese(shortName);
+        if (mapped != null) {
+            return mapped;
+        }
+        mapped = mapTeamNameToChinese(fullName);
+        if (mapped != null) {
+            return mapped;
+        }
+        return shortName == null || shortName.isBlank() ? fullName : shortName;
+    }
 
-        return nameMap.getOrDefault(shortName, shortName);
+    private String mapTeamNameToChinese(String teamName) {
+        if (teamName == null || teamName.isBlank()) {
+            return null;
+        }
+
+        String directMatch = TEAM_NAME_CN_MAP.get(teamName);
+        if (directMatch != null) {
+            return directMatch;
+        }
+
+        String normalizedName = normalizeTeamNameForMapping(teamName);
+        String normalizedMatch = TEAM_NAME_CN_MAP.get(normalizedName);
+        if (normalizedMatch != null) {
+            return normalizedMatch;
+        }
+
+        return null;
+    }
+
+    private String normalizeTeamNameForMapping(String teamName) {
+        if (teamName == null) {
+            return null;
+        }
+        String normalized = teamName
+            .toLowerCase(Locale.ROOT)
+            .replace("&", " and ")
+            .replace("-", " ")
+            .replace(".", "")
+            .replace(",", "")
+            .replace("'", "")
+            .replace("\"", "")
+            .replaceAll("\\s+", " ")
+            .trim();
+        return normalized;
+    }
+
+    private static java.util.Map<String, String> buildTeamNameChineseMap() {
+        java.util.Map<String, String> map = new java.util.HashMap<>();
+
+        addTeamNameAlias(map, "Arsenal", "阿森纳");
+        addTeamNameAlias(map, "Aston Villa", "阿斯顿维拉");
+        addTeamNameAlias(map, "Brentford", "布伦特福德");
+        addTeamNameAlias(map, "Brighton & Hove Albion", "布莱顿", "Brighton", "Brighton Hove", "Brighton Hove Albion");
+        addTeamNameAlias(map, "Burnley", "伯恩利");
+        addTeamNameAlias(map, "Chelsea", "切尔西");
+        addTeamNameAlias(map, "Crystal Palace", "水晶宫");
+        addTeamNameAlias(map, "Everton", "埃弗顿");
+        addTeamNameAlias(map, "Fulham", "富勒姆");
+        addTeamNameAlias(map, "Leeds United", "利兹联", "Leeds", "Leeds Utd", "Leeds U", "Leeds AFC", "Leeds FC");
+        addTeamNameAlias(map, "Liverpool", "利物浦");
+        addTeamNameAlias(map, "Manchester City", "曼城", "Man City", "Man. City");
+        addTeamNameAlias(map, "Manchester United", "曼联", "Man United", "Man Utd");
+        addTeamNameAlias(map, "Newcastle United", "纽卡斯尔", "Newcastle");
+        addTeamNameAlias(map, "Nottingham Forest", "诺丁汉森林", "Nottingham");
+        addTeamNameAlias(map, "Sunderland", "桑德兰", "Sunderland AFC", "Sunderland FC");
+        addTeamNameAlias(map, "Tottenham Hotspur", "热刺", "Tottenham");
+        addTeamNameAlias(map, "West Ham United", "西汉姆联", "West Ham");
+        addTeamNameAlias(map, "Wolves", "狼队", "Wolverhampton", "Wolverhampton Wanderers");
+        addTeamNameAlias(map, "Bournemouth", "伯恩茅斯");
+        addTeamNameAlias(map, "Sheffield United", "谢菲联");
+        addTeamNameAlias(map, "Luton Town", "卢顿城");
+        addTeamNameAlias(map, "Leicester City", "莱斯特城");
+        addTeamNameAlias(map, "Ipswich Town", "伊普斯维奇镇");
+        addTeamNameAlias(map, "Southampton", "南安普顿");
+
+        return map;
+    }
+
+    private void addTeamNameAlias(java.util.Map<String, String> map, String canonicalName, String chineseName, String... aliases) {
+        if (canonicalName == null || canonicalName.isBlank()) {
+            return;
+        }
+
+        map.put(canonicalName, chineseName);
+        String normalizedCanonical = normalizeTeamNameForMapping(canonicalName);
+        if (normalizedCanonical != null) {
+            map.put(normalizedCanonical, chineseName);
+        }
+
+        if (aliases != null) {
+            for (String alias : aliases) {
+                if (alias == null || alias.isBlank()) {
+                    continue;
+                }
+                map.put(alias, chineseName);
+                String normalizedAlias = normalizeTeamNameForMapping(alias);
+                if (normalizedAlias != null) {
+                    map.put(normalizedAlias, chineseName);
+                }
+            }
+        }
     }
 
     /**
-     * 获取位置中文名
+     * 获取中文职位
      */
     private String getChinesePosition(String position) {
         return switch (position) {
@@ -1019,3 +1100,6 @@ public class FootballDataProvider {
         private LocalDateTime timestamp;
     }
 }
+
+
+
