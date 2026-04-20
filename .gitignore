@@ -5,3 +5,8 @@ logs/
 *.log
 .DS_Store
 Thumbs.db
+
+# Keep local docs out of GitHub; README stays tracked
+/*.md
+!/README.md
+/.claude/
