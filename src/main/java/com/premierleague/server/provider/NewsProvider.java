@@ -36,4 +36,8 @@ public interface NewsProvider {
      * 获取抓取频率级别：high / medium / low
      */
     String getFrequencyLevel();
+
+    default boolean isEnabled() {
+        return true;
+    }
 }

@@ -10,6 +10,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -83,6 +84,39 @@ public class Player {
             Map.entry("Ivory Coast", "科特迪瓦")
     );
 
+    private static final Map<String, String> POSITION_LABEL_MAP = Map.ofEntries(
+            Map.entry("goalkeeper", "\u95e8\u5c06"),
+            Map.entry("defence", "\u540e\u536b"),
+            Map.entry("defender", "\u540e\u536b"),
+            Map.entry("centre back", "\u4e2d\u540e\u536b"),
+            Map.entry("center back", "\u4e2d\u540e\u536b"),
+            Map.entry("central defender", "\u4e2d\u540e\u536b"),
+            Map.entry("left back", "\u5de6\u540e\u536b"),
+            Map.entry("right back", "\u53f3\u540e\u536b"),
+            Map.entry("wing back", "\u8fb9\u7ffc\u536b"),
+            Map.entry("left wing back", "\u5de6\u8fb9\u7ffc\u536b"),
+            Map.entry("right wing back", "\u53f3\u8fb9\u7ffc\u536b"),
+            Map.entry("midfield", "\u4e2d\u573a"),
+            Map.entry("midfielder", "\u4e2d\u573a"),
+            Map.entry("defensive midfield", "\u540e\u8170"),
+            Map.entry("central midfield", "\u4e2d\u524d\u536b"),
+            Map.entry("attacking midfield", "\u524d\u8170"),
+            Map.entry("left midfield", "\u5de6\u524d\u536b"),
+            Map.entry("right midfield", "\u53f3\u524d\u536b"),
+            Map.entry("offence", "\u524d\u950b"),
+            Map.entry("offense", "\u524d\u950b"),
+            Map.entry("attack", "\u524d\u950b"),
+            Map.entry("attacker", "\u524d\u950b"),
+            Map.entry("forward", "\u524d\u950b"),
+            Map.entry("centre forward", "\u4e2d\u950b"),
+            Map.entry("center forward", "\u4e2d\u950b"),
+            Map.entry("striker", "\u524d\u950b"),
+            Map.entry("second striker", "\u5f71\u950b"),
+            Map.entry("left winger", "\u5de6\u8fb9\u950b"),
+            Map.entry("right winger", "\u53f3\u8fb9\u950b"),
+            Map.entry("winger", "\u8fb9\u950b")
+    );
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -148,6 +182,96 @@ public class Player {
         if (nationality == null || nationality.isBlank()) {
             return "";
         }
-        return NATIONALITY_MAP.getOrDefault(nationality, nationality);
+        String normalizedNationality = nationality.trim();
+        if ("Russia".equalsIgnoreCase(normalizedNationality)
+                || "Russian Federation".equalsIgnoreCase(normalizedNationality)) {
+            return "\u4fc4\u7f57\u65af";
+        }
+        return NATIONALITY_MAP.getOrDefault(normalizedNationality, normalizedNationality);
+    }
+
+    @Transient
+    public String getNationalityLabel() {
+        return getChineseNationality();
+    }
+
+    @Transient
+    public String getPositionLabel() {
+        String translatedChinesePosition = translatePosition(chinesePosition);
+        if (!translatedChinesePosition.isEmpty()) {
+            return translatedChinesePosition;
+        }
+        return translatePosition(position);
+    }
+
+    @Transient
+    public String getPhoto() {
+        return photoUrl;
+    }
+
+    private String translatePosition(String rawPosition) {
+        if (rawPosition == null || rawPosition.isBlank()) {
+            return "";
+        }
+        if (containsChinese(rawPosition)) {
+            return rawPosition;
+        }
+
+        String normalized = rawPosition.toLowerCase(Locale.ROOT)
+                .replace('-', ' ')
+                .replace('_', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        String direct = POSITION_LABEL_MAP.get(normalized);
+        if (direct != null) {
+            return direct;
+        }
+        if (normalized.contains("goal")) {
+            return "\u95e8\u5c06";
+        }
+        if (normalized.contains("back")) {
+            if (normalized.contains("left")) {
+                return "\u5de6\u540e\u536b";
+            }
+            if (normalized.contains("right")) {
+                return "\u53f3\u540e\u536b";
+            }
+            return "\u540e\u536b";
+        }
+        if (normalized.contains("midfield")) {
+            if (normalized.contains("defensive")) {
+                return "\u540e\u8170";
+            }
+            if (normalized.contains("attacking")) {
+                return "\u524d\u8170";
+            }
+            if (normalized.contains("left")) {
+                return "\u5de6\u524d\u536b";
+            }
+            if (normalized.contains("right")) {
+                return "\u53f3\u524d\u536b";
+            }
+            return "\u4e2d\u573a";
+        }
+        if (normalized.contains("wing")) {
+            if (normalized.contains("left")) {
+                return "\u5de6\u8fb9\u950b";
+            }
+            if (normalized.contains("right")) {
+                return "\u53f3\u8fb9\u950b";
+            }
+            return "\u8fb9\u950b";
+        }
+        if (normalized.contains("forward") || normalized.contains("attack")
+                || normalized.contains("offence") || normalized.contains("offense")
+                || normalized.contains("striker")) {
+            return "\u524d\u950b";
+        }
+        return rawPosition;
+    }
+
+    private boolean containsChinese(String value) {
+        return value.codePoints().anyMatch(codePoint -> codePoint >= 0x4E00 && codePoint <= 0x9FFF);
     }
 }

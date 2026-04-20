@@ -135,6 +135,7 @@ public class RedditProvider implements NewsProvider {
                     .id("reddit-" + id)
                     .title(title)
                     .summary(summary)
+                    .content(buildContent(title, selftext, summary))
                     .source("Reddit / r/PremierLeague")
                     .sourceType("reddit")
                     .mediaType(mediaType)
@@ -177,6 +178,16 @@ public class RedditProvider implements NewsProvider {
         // 兜底使用 thumbnail（只保留 https 开头的有效地址）
         if (thumbnail.startsWith("https://")) return thumbnail;
         return "";
+    }
+
+    private String buildContent(String title, String selftext, String summary) {
+        if (selftext != null && !selftext.isBlank()) {
+            return selftext;
+        }
+        if (summary != null && !summary.isBlank() && !summary.contains("条评论")) {
+            return summary;
+        }
+        return title;
     }
 
     /**

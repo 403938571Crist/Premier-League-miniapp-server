@@ -80,6 +80,9 @@ public class AdminController {
         if (provider == null) {
             return ApiResponse.error("Unknown source type: " + sourceType);
         }
+        if (!provider.isEnabled()) {
+            return ApiResponse.error("Source disabled: " + sourceType);
+        }
         
         long startTime = System.currentTimeMillis();
         
@@ -131,7 +134,7 @@ public class AdminController {
         stats.put("since", since.toString());
         
         Map<String, Object> sourceStats = new HashMap<>();
-        for (NewsProvider provider : providers) {
+        for (NewsProvider provider : providers.stream().filter(NewsProvider::isEnabled).toList()) {
             Map<String, Object> providerStats = newsFetchService.getFetchStats(
                     provider.getSourceType(), hours);
             sourceStats.put(provider.getSourceType(), providerStats);
@@ -159,6 +162,7 @@ public class AdminController {
     @GetMapping("/sources")
     public ApiResponse<List<Map<String, Object>>> getSourceStatus() {
         List<Map<String, Object>> sources = providers.stream()
+                .filter(NewsProvider::isEnabled)
                 .map(provider -> {
                     Map<String, Object> info = new HashMap<>();
                     info.put("sourceType", provider.getSourceType());
@@ -224,6 +228,30 @@ public class AdminController {
         return ApiResponse.ok(result);
     }
 
+    @PostMapping("/backfill/news")
+    public ApiResponse<Map<String, Object>> backfillNews(
+            @RequestParam(required = false) String sourceType,
+            @RequestParam(defaultValue = "50") int limit) {
+        log.info("[Admin] Starting news backfill, sourceType={}, limit={}", sourceType, limit);
+
+        Map<String, Object> result = newsFetchService.backfillNews(sourceType, limit);
+        clearNewsCaches();
+        return ApiResponse.ok(result);
+    }
+
+    @GetMapping("/backfill/news/{id}/inspect")
+    public ApiResponse<Map<String, Object>> inspectBackfillNews(@PathVariable String id) {
+        return ApiResponse.ok(newsFetchService.inspectBackfillState(id));
+    }
+
+    @PostMapping("/backfill/news/{id}")
+    public ApiResponse<Map<String, Object>> backfillNewsById(@PathVariable String id) {
+        log.info("[Admin] Starting news backfill by id={}", id);
+        Map<String, Object> result = newsFetchService.backfillNewsById(id);
+        clearNewsCaches();
+        return ApiResponse.ok(result);
+    }
+
     /** 从懂球帝 URL 中提取文章 ID */
     private String extractDongqiudiId(String url) {
         if (url == null) return null;
@@ -245,11 +273,7 @@ public class AdminController {
      */
     @PostMapping("/cache/evict")
     public ApiResponse<Map<String, Object>> evictNewsCache() {
-        String[] caches = {"newsList", "newsDetail", "transferNews", "socialPlayers"};
-        for (String c : caches) {
-            var cache = cacheManager.getCache(c);
-            if (cache != null) cache.clear();
-        }
+        String[] caches = clearNewsCaches();
         Map<String, Object> r = new HashMap<>();
         r.put("evicted", caches);
         r.put("at", LocalDateTime.now().toString());
@@ -263,12 +287,24 @@ public class AdminController {
      */
     @GetMapping("/health")
     public ApiResponse<Map<String, Object>> healthCheck() {
+        List<NewsProvider> enabledProviders = providers.stream()
+                .filter(NewsProvider::isEnabled)
+                .toList();
         Map<String, Object> health = new HashMap<>();
         health.put("status", "UP");
         health.put("timestamp", LocalDateTime.now().toString());
-        health.put("sources", providers.size());
-        health.put("sourcesAvailable", providers.stream().filter(NewsProvider::isAvailable).count());
+        health.put("sources", enabledProviders.size());
+        health.put("sourcesAvailable", enabledProviders.stream().filter(NewsProvider::isAvailable).count());
         
         return ApiResponse.ok(health);
+    }
+
+    private String[] clearNewsCaches() {
+        String[] caches = {"newsList", "newsDetail", "transferNews", "socialPlayers"};
+        for (String cacheName : caches) {
+            var cache = cacheManager.getCache(cacheName);
+            if (cache != null) cache.clear();
+        }
+        return caches;
     }
 }

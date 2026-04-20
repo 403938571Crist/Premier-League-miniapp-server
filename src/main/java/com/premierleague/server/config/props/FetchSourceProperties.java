@@ -22,7 +22,7 @@ public class FetchSourceProperties {
      * 高频源配置
      */
     private SourceConfig highFrequency = new SourceConfig(
-            List.of("romano", "x"),
+            List.of("romano"),
             2,  // 2分钟
             100 // 每次最多抓100条
     );
@@ -31,7 +31,7 @@ public class FetchSourceProperties {
      * 中频源配置
      */
     private SourceConfig mediumFrequency = new SourceConfig(
-            List.of("official", "dongqiudi"),
+            List.of("dongqiudi", "official", "sky", "guardian", "zhibo8"),
             10, // 10分钟
             50
     );
@@ -48,7 +48,7 @@ public class FetchSourceProperties {
      * 低频源配置
      */
     private SourceConfig lowFrequency = new SourceConfig(
-            List.of("bilibili", "douyin"),
+            List.of("reddit"),
             30, // 30分钟
             30
     );

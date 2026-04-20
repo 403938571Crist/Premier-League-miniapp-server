@@ -3,6 +3,8 @@ package com.premierleague.server.util;
 import io.netty.resolver.NoopAddressResolverGroup;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Connection;
+import org.jsoup.Jsoup;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -12,8 +14,14 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.transport.ProxyProvider;
 
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.StringWriter;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * HTTP 客户端封装
@@ -30,6 +38,9 @@ import java.util.Map;
 @Slf4j
 @Component
 public class HttpClientUtil {
+
+    private static final String BROWSER_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
 
     @Value("${http.proxy.host:}")
     private String proxyHost;
@@ -92,7 +103,7 @@ public class HttpClientUtil {
                     .block(Duration.ofSeconds(30));
         } catch (Exception e) {
             log.error("HTTP GET failed: {}", url, e);
-            return null;
+            return retryWithBrowserHeaders(url, "application/rss+xml, application/xml;q=0.9, application/json;q=0.8, text/plain;q=0.7, */*;q=0.6");
         }
     }
     
@@ -145,6 +156,146 @@ public class HttpClientUtil {
             log.error("HTTP GET with headers failed: {}", url, e);
             return null;
         }
+    }
+
+    public String get(URI uri) {
+        try {
+            return webClient.get()
+                    .uri(uri)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(30));
+        } catch (Exception e) {
+            log.error("HTTP GET failed: {}", uri, e);
+            return retryWithBrowserHeaders(uri.toString(), "application/json, text/plain, */*");
+        }
+    }
+
+    public String getHtml(String url) {
+        try {
+            return webClient.get()
+                    .uri(url)
+                    .header(HttpHeaders.ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(30));
+        } catch (Exception e) {
+            log.error("HTTP GET html failed: {}", url, e);
+            return retryWithBrowserHeaders(url, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        }
+    }
+
+    private String retryWithBrowserHeaders(String url, String acceptHeader) {
+        if (!shouldRetryWithBrowserHeaders(url)) {
+            return null;
+        }
+
+        try {
+            Connection.Response response = Jsoup.connect(url)
+                    .userAgent(BROWSER_USER_AGENT)
+                    .header(HttpHeaders.ACCEPT, acceptHeader)
+                    .header(HttpHeaders.ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
+                    .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+                    .referrer("https://www.google.com/")
+                    .timeout(30_000)
+                    .ignoreContentType(true)
+                    .ignoreHttpErrors(true)
+                    .followRedirects(true)
+                    .execute();
+
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                log.info("[HttpClientUtil] Browser-style retry succeeded for {}", url);
+                return response.body();
+            }
+
+            log.warn("[HttpClientUtil] Browser-style retry failed for {} with status {}", url, response.statusCode());
+        } catch (Exception retryException) {
+            log.warn("[HttpClientUtil] Browser-style retry failed for {}", url, retryException);
+        }
+        return retryWithSystemHttpStack(url);
+    }
+
+    private boolean shouldRetryWithBrowserHeaders(String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+
+        String lower = url.toLowerCase();
+        return lower.contains("skysports.com")
+                || lower.contains("theguardian.com")
+                || lower.contains("bbc.com")
+                || lower.contains("bbc.co.uk");
+    }
+
+    private String retryWithSystemHttpStack(String url) {
+        if (!shouldRetryWithSystemHttp(url)) {
+            return null;
+        }
+
+        if (!isWindows()) {
+            return null;
+        }
+
+        String powershellPath = resolvePowerShellPath();
+        String escapedUrl = url.replace("'", "''");
+        String script = "$ProgressPreference='SilentlyContinue'; "
+                + "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+                + "$resp = Invoke-WebRequest -UseBasicParsing '" + escapedUrl + "'; "
+                + "[Console]::Out.Write($resp.Content)";
+
+        Process process = null;
+        try {
+            process = new ProcessBuilder(powershellPath, "-Command", script)
+                    .redirectErrorStream(true)
+                    .start();
+
+            String output;
+            try (Reader reader = new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8);
+                 StringWriter writer = new StringWriter()) {
+                reader.transferTo(writer);
+                output = writer.toString();
+            }
+
+            boolean finished = process.waitFor(35, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("[HttpClientUtil] PowerShell fallback timed out for {}", url);
+                return null;
+            }
+
+            if (process.exitValue() == 0 && output != null && !output.isBlank()) {
+                log.info("[HttpClientUtil] PowerShell fallback succeeded for {}", url);
+                return output;
+            }
+
+            log.warn("[HttpClientUtil] PowerShell fallback failed for {} with exit code {}", url, process.exitValue());
+        } catch (Exception e) {
+            log.warn("[HttpClientUtil] PowerShell fallback failed for {}", url, e);
+        } finally {
+            if (process != null) {
+                process.destroy();
+            }
+        }
+        return null;
+    }
+
+    private boolean shouldRetryWithSystemHttp(String url) {
+        if (url == null || url.isBlank()) {
+            return false;
+        }
+        return url.toLowerCase().contains("skysports.com");
+    }
+
+    private boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
+    }
+
+    private String resolvePowerShellPath() {
+        String windir = System.getenv("WINDIR");
+        if (windir != null && !windir.isBlank()) {
+            return windir + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+        }
+        return "powershell.exe";
     }
 
     /**

@@ -32,6 +32,9 @@ public class XProvider implements NewsProvider {
     
     @Value("${app.x.bearer-token:}")
     private String bearerToken;
+
+    @Value("${app.x.enabled:false}")
+    private boolean enabled;
     
     // 重点关注的账号ID (Twitter User IDs)
     private static final List<String> WATCH_USER_IDS = List.of(
@@ -55,6 +58,11 @@ public class XProvider implements NewsProvider {
     
     @Override
     public List<News> fetchLatest(int maxItems) {
+        if (!isEnabled()) {
+            log.info("[XProvider] Source disabled, skipping fetch");
+            return List.of();
+        }
+
         if (!isAvailable()) {
             log.warn("[XProvider] Bearer token not configured, skipping fetch");
             return List.of();
@@ -145,6 +153,7 @@ public class XProvider implements NewsProvider {
             News news = News.builder()
                     .title(text.substring(0, Math.min(100, text.length())) + "...")
                     .summary(text)
+                    .content(text)
                     .source("X")
                     .sourceType("x")
                     .mediaType("social")
@@ -196,11 +205,16 @@ public class XProvider implements NewsProvider {
     
     @Override
     public boolean isAvailable() {
-        return bearerToken != null && !bearerToken.isEmpty();
+        return isEnabled() && bearerToken != null && !bearerToken.isEmpty();
     }
     
     @Override
     public String getFrequencyLevel() {
         return "high";
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return enabled;
     }
 }

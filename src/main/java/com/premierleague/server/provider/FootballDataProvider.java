@@ -987,7 +987,7 @@ public class FootballDataProvider {
         return null;
     }
 
-    private String normalizeTeamNameForMapping(String teamName) {
+    private static String normalizeTeamNameForMapping(String teamName) {
         if (teamName == null) {
             return null;
         }
@@ -1036,7 +1036,7 @@ public class FootballDataProvider {
         return map;
     }
 
-    private void addTeamNameAlias(java.util.Map<String, String> map, String canonicalName, String chineseName, String... aliases) {
+    private static void addTeamNameAlias(java.util.Map<String, String> map, String canonicalName, String chineseName, String... aliases) {
         if (canonicalName == null || canonicalName.isBlank()) {
             return;
         }

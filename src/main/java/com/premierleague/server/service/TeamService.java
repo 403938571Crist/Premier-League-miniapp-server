@@ -6,6 +6,7 @@ import com.premierleague.server.entity.Player;
 import com.premierleague.server.entity.Team;
 import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.provider.FootballDataProvider;
+import com.premierleague.server.provider.PlPhotoProvider;
 import com.premierleague.server.provider.PulseliveProvider;
 import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
@@ -38,6 +39,7 @@ public class TeamService {
     private final PlayerRepository playerRepository;
     private final MatchRepository matchRepository;
     private final FootballDataProvider footballDataProvider;
+    private final PlPhotoProvider plPhotoProvider;
     private final PulseliveProvider pulseliveProvider;
     private final SqlCacheService sqlCache;
 
@@ -209,11 +211,13 @@ public class TeamService {
             allPlayers = fetchSquadFromPulseliveLeaderboard(teamOpt.get(), storageTeamId);
         }
 
-        List<Player> goalkeepers = playersInGroup(allPlayers, "Goalkeeper");
-        List<Player> defenders = playersInGroup(allPlayers, "Defender");
-        List<Player> midfielders = playersInGroup(allPlayers, "Midfielder");
-        List<Player> attackers = playersInGroup(allPlayers, "Attacker");
-        List<Player> others = allPlayers.stream()
+        List<Player> enrichedPlayers = enrichPlayersForDisplay(allPlayers);
+
+        List<Player> goalkeepers = playersInGroup(enrichedPlayers, "Goalkeeper");
+        List<Player> defenders = playersInGroup(enrichedPlayers, "Defender");
+        List<Player> midfielders = playersInGroup(enrichedPlayers, "Midfielder");
+        List<Player> attackers = playersInGroup(enrichedPlayers, "Attacker");
+        List<Player> others = enrichedPlayers.stream()
                 .filter(p -> positionGroup(p.getPosition()).isEmpty())
                 .sorted(this::comparePlayers)
                 .collect(Collectors.toList());
@@ -224,8 +228,8 @@ public class TeamService {
         squad.put("attackers", attackers);
         squad.put("forwards", attackers);
         squad.put("others", others);
-        squad.put("all", allPlayers);
-        squad.put("totalCount", allPlayers.size());
+        squad.put("all", enrichedPlayers);
+        squad.put("totalCount", enrichedPlayers.size());
         
         return squad;
     }
@@ -349,6 +353,30 @@ public class TeamService {
                 .filter(p -> group.equals(positionGroup(p.getPosition())))
                 .sorted(this::comparePlayers)
                 .collect(Collectors.toList());
+    }
+
+    private List<Player> enrichPlayersForDisplay(List<Player> players) {
+        return players.stream()
+                .map(this::enrichPlayerForDisplay)
+                .collect(Collectors.toList());
+    }
+
+    private Player enrichPlayerForDisplay(Player player) {
+        if (player == null) {
+            return null;
+        }
+
+        String positionLabel = player.getPositionLabel();
+        if (positionLabel != null && !positionLabel.isBlank()) {
+            player.setChinesePosition(positionLabel);
+        }
+
+        String resolvedPhotoUrl = plPhotoProvider.findUsablePhotoUrl(player.getName(), player.getPhotoUrl());
+        if (resolvedPhotoUrl != null && !resolvedPhotoUrl.isBlank()) {
+            player.setPhotoUrl(resolvedPhotoUrl);
+        }
+
+        return player;
     }
 
     private String positionGroup(String position) {
@@ -499,12 +527,14 @@ public class TeamService {
             // 更新
             Player existingPlayer = existing.get();
             existingPlayer.setName(player.getName());
+            existingPlayer.setChineseName(player.getChineseName());
             existingPlayer.setPosition(player.getPosition());
             existingPlayer.setChinesePosition(player.getChinesePosition());
             existingPlayer.setShirtNumber(player.getShirtNumber());
             existingPlayer.setNationality(player.getNationality());
             existingPlayer.setDateOfBirth(player.getDateOfBirth());
             existingPlayer.setTeamId(player.getTeamId());
+            existingPlayer.setPhotoUrl(player.getPhotoUrl());
             return playerRepository.save(existingPlayer);
         } else {
             // 新建
