@@ -1,6 +1,7 @@
 package com.premierleague.server.entity;
 
 import jakarta.persistence.*;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -99,4 +100,34 @@ public class Team {
     
     @UpdateTimestamp
     private LocalDateTime updatedAt;
+
+    @JsonProperty("teamChineseName")
+    public String getTeamChineseName() {
+        return chineseName;
+    }
+
+    @JsonProperty("teamName")
+    public String getTeamName() {
+        return name;
+    }
+
+    @JsonProperty("teamId")
+    public Long getTeamId() {
+        return apiId;
+    }
+
+    @JsonProperty("crest")
+    public String getCrest() {
+        return crestUrl;
+    }
+
+    @JsonProperty("played")
+    public Integer getPlayed() {
+        return playedGames;
+    }
+
+    @JsonProperty("goals")
+    public Integer getGoals() {
+        return goalsFor;
+    }
 }
