@@ -56,7 +56,7 @@ public class UnderstatProvider {
     private final HttpClientUtil httpClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Cacheable(value = "fdUnderstatScorers", key = "'all'")
+    @Cacheable(value = "fdUnderstatScorers", key = "'all'", sync = true)
     public List<PlayerStat> fetchScorers() {
         List<PlayerStat> stats = new ArrayList<>();
         try {

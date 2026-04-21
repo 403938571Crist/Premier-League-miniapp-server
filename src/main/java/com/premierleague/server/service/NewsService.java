@@ -71,6 +71,7 @@ public class NewsService {
     private static final int FEATURED_FEED_WINDOW_MULTIPLIER = 6;
     private static final int FEATURED_FEED_OTHER_BATCH_SIZE = 3;
     private static final int FEATURED_FEED_SOURCE_BATCH_SIZE = 24;
+    private static final int FEATURED_FEED_ROMANO_MAX_AGE_DAYS = 3;
     private static final String SOURCE_OFFICIAL = "official";
     private static final String SOURCE_SKY = "sky";
     private static final String SOURCE_GUARDIAN = "guardian";
@@ -344,8 +345,14 @@ public class NewsService {
                 visibleNewsSpec(SOURCE_SKY, tag, keyword, false),
                 PageRequest.of(0, featuredFetchSize)
         ).getContent();
+        List<News> romanoNews = newsRepository.findAll(
+                visibleNewsSpec(SOURCE_ROMANO, tag, keyword, false),
+                PageRequest.of(0, featuredFetchSize)
+        ).getContent().stream()
+                .filter(this::isFreshEnoughForFeaturedRomano)
+                .collect(Collectors.toList());
 
-        List<News> blendedNews = blendFeaturedSources(allCandidatePage.getContent(), officialNews, skyNews);
+        List<News> blendedNews = blendFeaturedSources(allCandidatePage.getContent(), officialNews, skyNews, romanoNews);
 
         int fromIndex = Math.min((page - 1) * pageSize, blendedNews.size());
         int toIndex = Math.min(fromIndex + pageSize, blendedNews.size());
@@ -358,7 +365,12 @@ public class NewsService {
         return PageResult.of(items, page, pageSize, allCandidatePage.getTotalElements());
     }
 
-    private List<News> blendFeaturedSources(List<News> allCandidates, List<News> officialCandidates, List<News> skyCandidates) {
+    private List<News> blendFeaturedSources(
+            List<News> allCandidates,
+            List<News> officialCandidates,
+            List<News> skyCandidates,
+            List<News> romanoCandidates
+    ) {
         Map<String, News> uniqueOfficialNews = new LinkedHashMap<>();
         for (News candidate : officialCandidates) {
             uniqueOfficialNews.putIfAbsent(candidate.getId(), candidate);
@@ -369,24 +381,36 @@ public class NewsService {
             uniqueSkyNews.putIfAbsent(candidate.getId(), candidate);
         }
 
+        Map<String, News> uniqueRomanoNews = new LinkedHashMap<>();
+        for (News candidate : romanoCandidates) {
+            uniqueRomanoNews.putIfAbsent(candidate.getId(), candidate);
+        }
+
         List<News> otherNews = new ArrayList<>();
 
         for (News candidate : allCandidates) {
             String normalizedSourceType = normalizeParam(candidate.getSourceType());
-            if (!SOURCE_OFFICIAL.equalsIgnoreCase(normalizedSourceType) && !SOURCE_SKY.equalsIgnoreCase(normalizedSourceType)) {
+            if (!SOURCE_OFFICIAL.equalsIgnoreCase(normalizedSourceType)
+                    && !SOURCE_SKY.equalsIgnoreCase(normalizedSourceType)
+                    && !SOURCE_ROMANO.equalsIgnoreCase(normalizedSourceType)) {
                 otherNews.add(candidate);
             }
         }
 
         List<News> officialNews = new ArrayList<>(uniqueOfficialNews.values());
         List<News> skyNews = new ArrayList<>(uniqueSkyNews.values());
+        List<News> romanoNews = new ArrayList<>(uniqueRomanoNews.values());
 
-        List<News> blended = new ArrayList<>(allCandidates.size() + officialNews.size() + skyNews.size());
+        List<News> blended = new ArrayList<>(allCandidates.size() + officialNews.size() + skyNews.size() + romanoNews.size());
         int officialIndex = 0;
         int skyIndex = 0;
+        int romanoIndex = 0;
         int otherIndex = 0;
 
-        while (officialIndex < officialNews.size() || skyIndex < skyNews.size() || otherIndex < otherNews.size()) {
+        while (officialIndex < officialNews.size()
+                || skyIndex < skyNews.size()
+                || romanoIndex < romanoNews.size()
+                || otherIndex < otherNews.size()) {
             boolean added = false;
 
             if (officialIndex < officialNews.size()) {
@@ -395,6 +419,10 @@ public class NewsService {
             }
             if (skyIndex < skyNews.size()) {
                 blended.add(skyNews.get(skyIndex++));
+                added = true;
+            }
+            if (romanoIndex < romanoNews.size()) {
+                blended.add(romanoNews.get(romanoIndex++));
                 added = true;
             }
             for (int i = 0; i < FEATURED_FEED_OTHER_BATCH_SIZE && otherIndex < otherNews.size(); i++) {
@@ -408,6 +436,13 @@ public class NewsService {
         }
 
         return blended;
+    }
+
+    private boolean isFreshEnoughForFeaturedRomano(News news) {
+        if (news == null || news.getSourcePublishedAt() == null) {
+            return false;
+        }
+        return !news.getSourcePublishedAt().isBefore(LocalDateTime.now().minusDays(FEATURED_FEED_ROMANO_MAX_AGE_DAYS));
     }
 
     private void applyNewsOrdering(Root<News> root, CriteriaQuery<?> query, CriteriaBuilder cb, boolean preferFeaturedSources) {

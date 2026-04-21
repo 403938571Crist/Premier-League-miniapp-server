@@ -9,6 +9,7 @@ import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
 import com.premierleague.server.repository.SyncLogRepository;
 import com.premierleague.server.repository.TeamRepository;
+import com.premierleague.server.service.PlayerProfileBackfillService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +37,7 @@ public class FootballDataSyncScheduler {
     private final MatchRepository matchRepository;
     private final PlayerRepository playerRepository;
     private final SyncLogRepository syncLogRepository;
+    private final PlayerProfileBackfillService playerProfileBackfillService;
 
     @Value("${football-data.sync.enabled:true}")
     private boolean syncEnabled;
@@ -49,9 +51,19 @@ public class FootballDataSyncScheduler {
     @Value("${football-data.sync.squad.interval:21600000}")     // 默认 6 小时
     private long squadInterval;
 
+    @Value("${football-data.sync.player-profile.enabled:true}")
+    private boolean playerProfileSyncEnabled;
+
+    @Value("${football-data.sync.player-profile.interval:43200000}")
+    private long playerProfileInterval;
+
+    @Value("${football-data.sync.player-profile.batch-size:150}")
+    private int playerProfileBatchSize;
+
     private LocalDateTime lastStandingsSync = null;
     private LocalDateTime lastTeamsSync = null;
     private LocalDateTime lastSquadSync = null;
+    private LocalDateTime lastPlayerProfileSync = null;
 
     // ==================== 定时任务 ====================
 
@@ -145,6 +157,22 @@ public class FootballDataSyncScheduler {
         
         log.info("[FootballDataSyncScheduler] Starting scheduled squads sync");
         syncAllSquads();
+    }
+
+    @Scheduled(fixedRate = 43200000, initialDelay = 300000)
+    @Transactional
+    public void scheduledBackfillPlayerProfiles() {
+        if (!syncEnabled || !playerProfileSyncEnabled) {
+            return;
+        }
+
+        if (lastPlayerProfileSync != null
+                && System.currentTimeMillis() - lastPlayerProfileSync.toInstant(java.time.ZoneOffset.UTC).toEpochMilli() < playerProfileInterval) {
+            return;
+        }
+
+        log.info("[FootballDataSyncScheduler] Starting player profile backfill");
+        backfillPlayerProfiles();
     }
 
     // ==================== 同步方法 ====================
@@ -473,6 +501,41 @@ public class FootballDataSyncScheduler {
     /**
      * 保存比赛列表
      */
+    @Transactional
+    public SyncLog backfillPlayerProfiles() {
+        long startTime = System.currentTimeMillis();
+        SyncLog.SyncLogBuilder logBuilder = SyncLog.builder()
+                .syncType("PLAYER_PROFILE")
+                .syncTime(LocalDateTime.now())
+                .source("local-backfill");
+
+        try {
+            PlayerProfileBackfillService.BackfillResult result =
+                    playerProfileBackfillService.backfillMissingProfiles(playerProfileBatchSize);
+
+            logBuilder.status("SUCCESS")
+                    .itemsCount(result.scanned())
+                    .successCount(result.updatedPlayers())
+                    .failCount(0)
+                    .detailLog(String.format(
+                            "Profile backfill scanned %d players, updated %d, chineseNames=%d, photos=%d",
+                            result.scanned(),
+                            result.updatedPlayers(),
+                            result.chineseNamesUpdated(),
+                            result.photosUpdated()
+                    ));
+
+            lastPlayerProfileSync = LocalDateTime.now();
+            log.info("[FootballDataSyncScheduler] Player profile backfill completed: {}", result);
+        } catch (Exception e) {
+            log.error("[FootballDataSyncScheduler] Player profile backfill failed: {}", e.getMessage(), e);
+            logBuilder.status("FAILED")
+                    .errorMessage(e.getMessage());
+        }
+
+        return saveSyncLog(logBuilder, startTime);
+    }
+
     private int saveMatches(List<Match> matches) {
         int successCount = 0;
         
@@ -528,6 +591,15 @@ public class FootballDataSyncScheduler {
                     existingPlayer.setNationality(player.getNationality());
                     existingPlayer.setDateOfBirth(player.getDateOfBirth());
                     existingPlayer.setTeamId(player.getTeamId());
+                    if (player.getChineseName() != null && !player.getChineseName().isBlank()) {
+                        existingPlayer.setChineseName(player.getChineseName());
+                    }
+                    if (player.getChinesePosition() != null && !player.getChinesePosition().isBlank()) {
+                        existingPlayer.setChinesePosition(player.getChinesePosition());
+                    }
+                    if (player.getPhotoUrl() != null && !player.getPhotoUrl().isBlank()) {
+                        existingPlayer.setPhotoUrl(player.getPhotoUrl());
+                    }
                     playerRepository.save(existingPlayer);
                 } else {
                     // 新建

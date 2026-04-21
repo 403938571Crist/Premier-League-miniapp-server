@@ -64,6 +64,10 @@ football-data:
       interval: 43200000    # 12 小时
     squad:
       interval: 21600000    # 6 小时
+    player-profile:
+      enabled: true
+      interval: 43200000    # 12 小时
+      batch-size: 150
 
 # API-Football (RapidAPI / api-sports.io) 配置
 # 免费档：100 请求/天，30 请求/分钟

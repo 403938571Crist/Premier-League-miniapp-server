@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.premierleague.server.entity.News;
 import com.premierleague.server.util.HttpClientUtil;
+import org.jsoup.Jsoup;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +44,9 @@ public class NewsTranslationService {
 
     @Value("${app.translation.google.base-url:https://translate.googleapis.com/translate_a/single}")
     private String googleBaseUrl;
+
+    @Value("${app.translation.google.mobile-url:https://translate.google.com/m}")
+    private String googleMobileUrl;
 
     public News translateForStorage(News news) {
         if (news == null || !enabled) {
@@ -146,12 +150,25 @@ public class NewsTranslationService {
     }
 
     private String normalizeStoredText(String text) {
-        if (text == null || text.isBlank() || !URL_ESCAPE_PATTERN.matcher(text).find()) {
+        if (text == null || text.isBlank()) {
             return text;
         }
+
+        String normalized = text;
+        if (URL_ESCAPE_PATTERN.matcher(normalized).find()) {
+            try {
+                normalized = URLDecoder.decode(normalized, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                return text;
+            }
+        }
+
         try {
-            String decoded = URLDecoder.decode(text, StandardCharsets.UTF_8);
-            return Parser.unescapeEntities(decoded, false);
+            normalized = Parser.unescapeEntities(normalized, false)
+                    .replace('\u00A0', ' ')
+                    .replace("\u200B", "")
+                    .trim();
+            return normalized;
         } catch (Exception e) {
             return text;
         }
@@ -216,13 +233,16 @@ public class NewsTranslationService {
                     .toUri();
             String response = httpClientUtil.get(uri);
             if (response == null || response.isBlank()) {
-                return text;
+                return translateWithGoogleMobilePage(text);
+            }
+            if (looksLikeHtml(response)) {
+                return translateWithGoogleMobilePage(text);
             }
 
             JsonNode root = objectMapper.readTree(response);
             JsonNode segments = root.path(0);
             if (!segments.isArray()) {
-                return text;
+                return translateWithGoogleMobilePage(text);
             }
 
             StringBuilder translated = new StringBuilder();
@@ -233,10 +253,43 @@ public class NewsTranslationService {
             }
 
             String output = translated.toString().trim();
-            return output.isEmpty() ? text : output;
+            return output.isEmpty() ? translateWithGoogleMobilePage(text) : output;
         } catch (Exception e) {
             log.warn("[NewsTranslation] Failed to translate text", e);
+            return translateWithGoogleMobilePage(text);
+        }
+    }
+
+    private String translateWithGoogleMobilePage(String text) {
+        try {
+            URI uri = UriComponentsBuilder.fromHttpUrl(googleMobileUrl)
+                    .queryParam("sl", "auto")
+                    .queryParam("tl", "zh-CN")
+                    .queryParam("q", text)
+                    .build()
+                    .toUri();
+            String html = httpClientUtil.get(uri);
+            if (html == null || html.isBlank()) {
+                return text;
+            }
+
+            String translated = Jsoup.parse(html)
+                    .selectFirst(".result-container")
+                    .text()
+                    .trim();
+            return translated.isEmpty() ? text : translated;
+        } catch (Exception e) {
+            log.warn("[NewsTranslation] Google mobile fallback failed", e);
             return text;
         }
+    }
+
+    private boolean looksLikeHtml(String response) {
+        String value = response == null ? "" : response.trim().toLowerCase();
+        return value.startsWith("<!doctype html")
+                || value.startsWith("<html")
+                || value.startsWith("<head")
+                || value.startsWith("<body")
+                || value.startsWith("<title");
     }
 }

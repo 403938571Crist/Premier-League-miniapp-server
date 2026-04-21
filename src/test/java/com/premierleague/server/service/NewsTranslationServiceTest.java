@@ -31,6 +31,7 @@ class NewsTranslationServiceTest {
         ReflectionTestUtils.setField(newsTranslationService, "enabled", true);
         ReflectionTestUtils.setField(newsTranslationService, "provider", "google");
         ReflectionTestUtils.setField(newsTranslationService, "googleBaseUrl", "https://translate.googleapis.com/translate_a/single");
+        ReflectionTestUtils.setField(newsTranslationService, "googleMobileUrl", "https://translate.google.com/m");
 
         when(httpClientUtil.get(any(URI.class))).thenAnswer(invocation -> {
             URI uri = invocation.getArgument(0, URI.class);
@@ -38,7 +39,9 @@ class NewsTranslationServiceTest {
             String translated = decoded
                     .replace("Haaland faces Arsenal", "哈兰德对阵阿森纳")
                     .replace("Manchester City still have hope.", "曼城仍然保有希望。")
-                    .replace("City have nothing to lose.", "曼城已经没有什么可失去的。");
+                    .replace("City have nothing to lose.", "曼城已经没有什么可失去的。")
+                    .replace("Bayer Leverkusen defender Jarrell Quansah says leaving Liverpool was a \"no-brainer\".",
+                            "勒沃库森后卫贾雷尔·夸萨表示离开利物浦是“理所当然的”。");
             return googleResponse(translated);
         });
     }
@@ -98,10 +101,73 @@ class NewsTranslationServiceTest {
         assertTrue(newsTranslationService.needsCleanup(news));
     }
 
+    @Test
+    void fallsBackToGoogleMobilePageWhenJsonEndpointReturnsHtml() {
+        when(httpClientUtil.get(any(URI.class))).thenAnswer(invocation -> {
+            URI uri = invocation.getArgument(0, URI.class);
+            String url = uri.toString();
+            if (url.contains("/translate_a/single")) {
+                return """
+                        <HTML><HEAD><TITLE>302 Moved</TITLE></HEAD>
+                        <BODY>The document has moved</BODY></HTML>
+                        """;
+            }
+            if (url.contains("translate.google.com/m")) {
+                return """
+                        <!DOCTYPE html>
+                        <html>
+                          <body>
+                            <div class="result-container">曼城仍有希望。</div>
+                          </body>
+                        </html>
+                        """;
+            }
+            return null;
+        });
+
+        News news = News.builder()
+                .id("sky-3")
+                .title("Manchester City still have hope.")
+                .summary("Manchester City still have hope.")
+                .source("Sky Sports")
+                .sourceType("sky")
+                .mediaType("article")
+                .sourcePublishedAt(LocalDateTime.of(2026, 4, 21, 12, 0))
+                .url("https://www.skysports.com/example")
+                .build();
+
+        News translated = newsTranslationService.translateForStorage(news);
+
+        assertEquals("曼城仍有希望。", translated.getTitle());
+        assertEquals("曼城仍有希望。", translated.getSummary());
+    }
+
+    @Test
+    void normalizesHtmlEntitiesBeforeTranslatingSummary() {
+        News news = News.builder()
+                .id("sky-4")
+                .title("夸萨：离开利物浦加盟勒沃库森是理所当然的事")
+                .summary("&#8203;&#8203;&#8203;Bayer Leverkusen&#160;defender&#160;Jarrell Quansah&#160;says leaving Liverpool was a \"no-brainer\".&#160;")
+                .content("勒沃库森后卫贾雷尔·夸萨表示离开利物浦是“理所当然的”。")
+                .source("Sky Sports")
+                .sourceType("sky")
+                .mediaType("article")
+                .sourcePublishedAt(LocalDateTime.of(2026, 4, 21, 12, 0))
+                .url("https://www.skysports.com/example")
+                .build();
+
+        News translated = newsTranslationService.translateForStorage(news);
+
+        assertEquals("勒沃库森后卫贾雷尔·夸萨表示离开利物浦是“理所当然的”。", translated.getSummary());
+    }
+
     private String decodeQuery(String url) {
         int qIndex = url.indexOf("&q=");
         String encoded = qIndex >= 0 ? url.substring(qIndex + 3) : "";
-        return URLDecoder.decode(encoded, StandardCharsets.UTF_8);
+        return URLDecoder.decode(encoded, StandardCharsets.UTF_8)
+                .replace('\u00A0', ' ')
+                .replace("\u200B", "")
+                .trim();
     }
 
     private String googleResponse(String translated) throws JsonProcessingException {

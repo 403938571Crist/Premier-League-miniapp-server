@@ -14,26 +14,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 给 Understat / Fbref 等外部源补齐球员头像。
- *
- * 原理：拿球员英文名去 pulselive 的 PL 搜索拿到 Opta ID (altIds.opta = "p{id}")，
- *       再拼成官方 CDN URL:
- *         https://resources.premierleague.com/premierleague/photos/players/250x250/p{id}.png
- *
- * 搜索 API（公开、跨域可调）：
- *   GET https://footballapi.pulselive.com/search/PremierLeague
- *         ?terms={name}&type=player&size=3&start=0&fullObjectResponse=true
- *
- * 响应结构 (节选):
- *   {"hits":{"hit":[{"response":{
- *       "altIds":{"opta":"p223094"},
- *       "name":{"display":"Erling Haaland","first":"Erling","last":"Haaland"},
- *       ...
- *   }}]}}
- *
- * 进程内缓存 name → photoUrl，命中不了的记录 "" 防止重复查询。
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -59,46 +39,81 @@ public class PlPhotoProvider {
                     + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     );
 
+    private static final Map<String, String> SEARCH_ALIASES = Map.ofEntries(
+            Map.entry("Gabriel", "Gabriel Magalhaes"),
+            Map.entry("Gabriel Magalhães", "Gabriel Magalhaes"),
+            Map.entry("Sávio", "Savinho"),
+            Map.entry("Savio", "Savinho"),
+            Map.entry("Nico O’Reilly", "Nico O'Reilly"),
+            Map.entry("Nico OReilly", "Nico O'Reilly"),
+            Map.entry("Chido Obi-Martin", "Chido Obi"),
+            Map.entry("Ifeoluwa Ibrahim", "Ife Ibrahim")
+    );
+
+    private static final Map<String, String> OPTA_OVERRIDES = Map.ofEntries(
+            Map.entry("Gabriel", "p226597"),
+            Map.entry("Sávio", "p510281"),
+            Map.entry("Savio", "p510281"),
+            Map.entry("Nico O'Reilly", "p472769"),
+            Map.entry("Nico O’Reilly", "p472769"),
+            Map.entry("Chido Obi", "p596047"),
+            Map.entry("Chido Obi-Martin", "p596047"),
+            Map.entry("Ife Ibrahim", "p616068"),
+            Map.entry("Ifeoluwa Ibrahim", "p616068"),
+            Map.entry("Ceadach O'Neill", "p645551"),
+            Map.entry("Ceadach O’Neill", "p645551")
+    );
+
     private final HttpClientUtil http;
+    private final WikipediaPlayerPhotoProvider wikipediaPlayerPhotoProvider;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    /** name → photoUrl （空串代表查过但没找到，避免重复调用） */
+    // Cache positive hits only so transient network failures do not get stuck as permanent misses.
     private final Map<String, String> cache = new ConcurrentHashMap<>();
 
-    /**
-     * 查该球员的官方头像 URL，查不到返回 null。
-     * 失败不抛异常，降级到 null 让前端走 initials 占位。
-     */
     public String findPhotoUrl(String playerName) {
-        if (playerName == null || playerName.isBlank()) return null;
-        String key = playerName.trim();
-
-        String hit = cache.get(key);
-        if (hit != null) {
-            return hit.isEmpty() ? null : hit;
+        if (playerName == null || playerName.isBlank()) {
+            return null;
         }
 
-        // 1) 原名直查
-        String photo = searchByName(key);
+        String key = playerName.trim();
+        String hit = cache.get(key);
+        if (hit != null) {
+            return hit;
+        }
 
-        // 2) 去掉音调后重试（João Pedro / Núñez / Højlund 这种）
+        String overridePhoto = resolveOverridePhoto(key);
+        if (overridePhoto != null) {
+            cache.put(key, overridePhoto);
+            return overridePhoto;
+        }
+
+        String photo = searchByAlias(key);
         if (photo == null) {
-            String ascii = stripAccents(key);
-            if (!ascii.equals(key)) {
-                photo = searchByName(ascii);
+            photo = searchByName(key);
+        }
+        if (photo == null) {
+            String normalized = stripAccents(key);
+            if (!normalized.equals(key)) {
+                photo = searchByName(normalized);
             }
         }
 
-        // 3) 只留姓氏再试（"Mathis Cherki" → "Cherki"，handles 名字不完全一致的情况）
         if (photo == null) {
             String[] parts = key.split("\\s+");
             if (parts.length > 1) {
-                String last = stripAccents(parts[parts.length - 1]);
-                photo = searchByName(last);
+                String lastName = stripAccents(parts[parts.length - 1]);
+                photo = searchByName(lastName);
             }
         }
 
-        cache.put(key, photo == null ? "" : photo);
+        if (photo == null) {
+            photo = wikipediaPlayerPhotoProvider.findPhotoUrl(key);
+        }
+
+        if (photo != null) {
+            cache.put(key, photo);
+        }
         return photo;
     }
 
@@ -121,18 +136,25 @@ public class PlPhotoProvider {
         return findPhotoUrl(playerName);
     }
 
+    public String findPhotoUrlByOfficialId(String officialId) {
+        if (officialId == null || officialId.isBlank()) {
+            return null;
+        }
+        return resolvePhotoUrl(officialId.startsWith("p") ? officialId : "p" + officialId);
+    }
+
     private String searchByName(String name) {
         try {
-            String url = String.format(SEARCH_URL,
-                    URLEncoder.encode(name, StandardCharsets.UTF_8));
+            String url = String.format(SEARCH_URL, URLEncoder.encode(name, StandardCharsets.UTF_8));
             String body = http.getWithHeaders(url, Map.of(
                     "Origin", "https://www.premierleague.com",
                     "Referer", "https://www.premierleague.com/",
-                    "User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                             + "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ));
-            if (body == null || body.isEmpty()) return null;
+            if (body == null || body.isEmpty()) {
+                return null;
+            }
 
             JsonNode root = mapper.readTree(body);
             JsonNode hits = root.path("hits").path("hit");
@@ -143,7 +165,9 @@ public class PlPhotoProvider {
 
             JsonNode picked = pickBestMatch(hits, name);
             String opta = picked.path("response").path("altIds").path("opta").asText(null);
-            if (opta == null || opta.isBlank()) return null;
+            if (opta == null || opta.isBlank()) {
+                return null;
+            }
 
             String photoUrl = resolvePhotoUrl(opta);
             log.debug("[PlPhoto] {} -> {} -> {}", name, opta, photoUrl);
@@ -152,6 +176,28 @@ public class PlPhotoProvider {
             log.debug("[PlPhoto] searchByName failed for {}: {}", name, e.getMessage());
             return null;
         }
+    }
+
+    private String searchByAlias(String name) {
+        String alias = SEARCH_ALIASES.get(name);
+        if (alias == null) {
+            alias = SEARCH_ALIASES.get(stripAccents(name));
+        }
+        if (alias == null || alias.equalsIgnoreCase(name)) {
+            return null;
+        }
+        return searchByName(alias);
+    }
+
+    private String resolveOverridePhoto(String name) {
+        String opta = OPTA_OVERRIDES.get(name);
+        if (opta == null) {
+            opta = OPTA_OVERRIDES.get(stripAccents(name));
+        }
+        if (opta == null) {
+            return null;
+        }
+        return resolvePhotoUrl(opta);
     }
 
     private String resolvePhotoUrl(String opta) {
@@ -194,21 +240,45 @@ public class PlPhotoProvider {
         return id.startsWith("p") ? id : "p" + id;
     }
 
-    /** "João" → "Joao"，"Højlund" → "Hojlund" */
-    private static String stripAccents(String s) {
-        String nfd = Normalizer.normalize(s, Normalizer.Form.NFD);
-        return nfd.replaceAll("\\p{M}", "").replace("ø", "o").replace("Ø", "O");
+    private static String stripAccents(String value) {
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKD);
+        return normalized.replaceAll("\\p{M}", "")
+                .replace('\u2019', '\'')
+                .replace('\u2018', '\'')
+                .replace('\u2013', '-')
+                .replace('\u2014', '-')
+                .replace('\u0131', 'i')
+                .replace('\u0141', 'L')
+                .replace('\u0142', 'l')
+                .replace('\u00d8', 'O')
+                .replace('\u00f8', 'o')
+                .replace('\u0110', 'D')
+                .replace('\u0111', 'd')
+                .replace('\u015e', 'S')
+                .replace('\u015f', 's')
+                .replace('\u0218', 'S')
+                .replace('\u0219', 's')
+                .replace('\u021a', 'T')
+                .replace('\u021b', 't')
+                .replace("酶", "o")
+                .replace("脴", "O");
     }
 
     private JsonNode pickBestMatch(JsonNode hits, String query) {
         String q = query.toLowerCase(Locale.ROOT);
-        for (JsonNode h : hits) {
-            String display = h.path("response").path("name").path("display").asText("");
-            if (display.equalsIgnoreCase(query)) return h;
+        for (JsonNode hit : hits) {
+            String display = hit.path("response").path("name").path("display").asText("");
+            if (display.equalsIgnoreCase(query)) {
+                return hit;
+            }
         }
-        for (JsonNode h : hits) {
-            String display = h.path("response").path("name").path("display").asText("").toLowerCase(Locale.ROOT);
-            if (display.contains(q) || q.contains(display)) return h;
+        for (JsonNode hit : hits) {
+            String display = hit.path("response").path("name").path("display")
+                    .asText("")
+                    .toLowerCase(Locale.ROOT);
+            if (display.contains(q) || q.contains(display)) {
+                return hit;
+            }
         }
         return hits.get(0);
     }

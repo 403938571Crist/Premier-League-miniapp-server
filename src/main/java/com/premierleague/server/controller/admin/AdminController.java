@@ -8,6 +8,9 @@ import com.premierleague.server.provider.NewsProvider;
 import com.premierleague.server.repository.FetchLogRepository;
 import com.premierleague.server.repository.NewsRepository;
 import com.premierleague.server.service.NewsFetchService;
+import com.premierleague.server.service.PlayerProfileBackfillService;
+import com.premierleague.server.service.PlayerSocialBackfillService;
+import com.premierleague.server.service.PlayerSquadBackfillService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.CacheManager;
@@ -31,6 +34,9 @@ import java.util.stream.Collectors;
 public class AdminController {
     
     private final NewsFetchService newsFetchService;
+    private final PlayerProfileBackfillService playerProfileBackfillService;
+    private final PlayerSquadBackfillService playerSquadBackfillService;
+    private final PlayerSocialBackfillService playerSocialBackfillService;
     private final FetchLogRepository fetchLogRepository;
     private final NewsRepository newsRepository;
     private final DongqiudiProvider dongqiudiProvider;
@@ -253,6 +259,84 @@ public class AdminController {
     }
 
     /** 从懂球帝 URL 中提取文章 ID */
+    @PostMapping("/backfill/players")
+    public ApiResponse<Map<String, Object>> backfillPlayers(
+            @RequestParam(defaultValue = "150") int limit) {
+        log.info("[Admin] Starting player profile backfill, limit={}", limit);
+        PlayerProfileBackfillService.BackfillResult result =
+                playerProfileBackfillService.backfillMissingProfiles(limit);
+
+        var squadCache = cacheManager.getCache("teamSquad");
+        if (squadCache != null) {
+            squadCache.clear();
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("scanned", result.scanned());
+        payload.put("updated", result.updatedPlayers());
+        payload.put("chineseNamesUpdated", result.chineseNamesUpdated());
+        payload.put("photosUpdated", result.photosUpdated());
+        return ApiResponse.ok(payload);
+    }
+
+    @PostMapping("/backfill/players/big6")
+    public ApiResponse<Map<String, Object>> backfillBig6Players(
+            @RequestParam(defaultValue = "150") int limit) {
+        List<Long> big6TeamIds = List.of(1L, 2L, 3L, 5L, 6L, 18L);
+        log.info("[Admin] Starting big6 player profile backfill, limit={}", limit);
+        PlayerProfileBackfillService.BackfillResult result =
+                playerProfileBackfillService.backfillMissingProfiles(limit, big6TeamIds);
+
+        var squadCache = cacheManager.getCache("teamSquad");
+        if (squadCache != null) {
+            squadCache.clear();
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("scope", "big6");
+        payload.put("teamIds", big6TeamIds);
+        payload.put("scanned", result.scanned());
+        payload.put("updated", result.updatedPlayers());
+        payload.put("chineseNamesUpdated", result.chineseNamesUpdated());
+        payload.put("photosUpdated", result.photosUpdated());
+        return ApiResponse.ok(payload);
+    }
+
+    @PostMapping("/backfill/players/squad")
+    public ApiResponse<Map<String, Object>> backfillPlayerSquads(
+            @RequestParam List<Long> teamIds) {
+        log.info("[Admin] Starting official squad backfill, teamIds={}", teamIds);
+        PlayerSquadBackfillService.BackfillResult result =
+                playerSquadBackfillService.backfillOfficialSquads(teamIds);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("teamIds", teamIds);
+        payload.put("scannedTeams", result.scannedTeams());
+        payload.put("scannedPlayers", result.scannedPlayers());
+        payload.put("createdPlayers", result.createdPlayers());
+        payload.put("updatedPlayers", result.updatedPlayers());
+        payload.put("photosUpdated", result.photosUpdated());
+        return ApiResponse.ok(payload);
+    }
+
+    @PostMapping("/backfill/player-social")
+    public ApiResponse<Map<String, Object>> backfillPlayerSocial(
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(required = false) List<Long> teamIds) {
+        log.info("[Admin] Starting player social backfill, limit={}, teamIds={}", limit, teamIds);
+        PlayerSocialBackfillService.BackfillResult result =
+                playerSocialBackfillService.backfillPlayerSocials(limit, teamIds);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("limit", limit);
+        payload.put("teamIds", teamIds);
+        payload.put("scannedPlayers", result.scannedPlayers());
+        payload.put("playersWithProfiles", result.playersWithProfiles());
+        payload.put("insertedProfiles", result.insertedProfiles());
+        payload.put("updatedProfiles", result.updatedProfiles());
+        return ApiResponse.ok(payload);
+    }
+
     private String extractDongqiudiId(String url) {
         if (url == null) return null;
         // 兼容：/articles/12345.html、/articles/12345、/article/12345

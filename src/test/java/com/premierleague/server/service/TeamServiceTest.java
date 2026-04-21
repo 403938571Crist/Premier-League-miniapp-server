@@ -5,20 +5,25 @@ import com.premierleague.server.entity.Team;
 import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.provider.FootballDataProvider;
 import com.premierleague.server.provider.PlPhotoProvider;
-import com.premierleague.server.provider.PulseliveProvider;
 import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
 import com.premierleague.server.repository.TeamRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -30,7 +35,7 @@ class TeamServiceTest {
     private MatchRepository matchRepository;
     private FootballDataProvider footballDataProvider;
     private PlPhotoProvider plPhotoProvider;
-    private PulseliveProvider pulseliveProvider;
+    private PlayerService playerService;
     private SqlCacheService sqlCacheService;
     private TeamService teamService;
 
@@ -41,7 +46,7 @@ class TeamServiceTest {
         matchRepository = mock(MatchRepository.class);
         footballDataProvider = mock(FootballDataProvider.class);
         plPhotoProvider = mock(PlPhotoProvider.class);
-        pulseliveProvider = mock(PulseliveProvider.class);
+        playerService = mock(PlayerService.class);
         sqlCacheService = mock(SqlCacheService.class);
         teamService = new TeamService(
                 teamRepository,
@@ -49,7 +54,7 @@ class TeamServiceTest {
                 matchRepository,
                 footballDataProvider,
                 plPhotoProvider,
-                pulseliveProvider,
+                playerService,
                 sqlCacheService
         );
     }
@@ -84,11 +89,11 @@ class TeamServiceTest {
         assertEquals(5, squad.get("totalCount"));
         assertTrue(players(squad, "others").isEmpty());
 
-        verifyNoInteractions(footballDataProvider, pulseliveProvider);
+        verifyNoInteractions(footballDataProvider, playerService, plPhotoProvider);
     }
 
     @Test
-    void enrichesDisplayLabelsAndPhotoFallback() {
+    void enrichesDisplayLabelsWithoutRealtimePhotoLookup() {
         Team team = Team.builder()
                 .id(1L)
                 .apiId(57L)
@@ -98,13 +103,9 @@ class TeamServiceTest {
 
         when(teamRepository.findById(1L)).thenReturn(Optional.of(team));
         when(playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(1L)).thenReturn(List.of(
-                player(20L, "Aleksei Fedorushchenko", "Goalkeeper", "1", "Russia"),
-                player(41L, "Ben White", "Right-Back", "4", "England")
+                player(20L, "Aleksei Fedorushchenko", "Goalkeeper", "1", "Russia", null),
+                player(41L, "Ben White", "Right-Back", "4", "England", "https://img/ben-white.png")
         ));
-        when(plPhotoProvider.findUsablePhotoUrl("Aleksei Fedorushchenko", null))
-                .thenReturn("https://img/aleksei.png");
-        when(plPhotoProvider.findUsablePhotoUrl("Ben White", null))
-                .thenReturn("https://img/ben-white.png");
 
         Map<String, Object> squad = teamService.getTeamSquad(1L);
 
@@ -112,13 +113,48 @@ class TeamServiceTest {
         Player defender = players(squad, "defenders").get(0);
 
         assertEquals("俄罗斯", goalkeeper.getNationalityLabel());
-        assertEquals("https://img/aleksei.png", goalkeeper.getPhotoUrl());
+        assertNull(goalkeeper.getPhotoUrl());
         assertEquals("右后卫", defender.getPositionLabel());
         assertEquals("https://img/ben-white.png", defender.getPhotoUrl());
+        verifyNoInteractions(plPhotoProvider);
     }
 
     @Test
-    void fallsBackToPulseliveWhenDbAndFootballDataAreEmpty() {
+    void dedupesCanonicalAndLegacySquadRowsForSamePlayer() {
+        Team team = Team.builder()
+                .id(3L)
+                .apiId(66L)
+                .name("Manchester United FC")
+                .shortName("Man Utd")
+                .build();
+
+        Player canonical = player(null, "Altay Bayindir", "Goalkeeper", "1", "Turkey", null);
+        canonical.setId(419L);
+        canonical.setTeamId(3L);
+        canonical.setDateOfBirth(LocalDate.of(1998, 4, 14));
+
+        Player legacy = player(2L, "Altay Bayındır", "Goalkeeper", "1", "Turkey", "https://img/altay.png");
+        legacy.setId(2L);
+        legacy.setTeamId(66L);
+        legacy.setChineseName("巴因迪尔");
+        legacy.setDateOfBirth(LocalDate.of(1998, 4, 14));
+
+        when(teamRepository.findById(3L)).thenReturn(Optional.of(team));
+        when(playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(3L)).thenReturn(List.of(canonical));
+        when(playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(66L)).thenReturn(List.of(legacy));
+
+        Map<String, Object> squad = teamService.getTeamSquad(3L);
+
+        List<Player> goalkeepers = players(squad, "goalkeepers");
+        assertEquals(1, goalkeepers.size());
+        assertEquals(1, squad.get("totalCount"));
+        assertEquals("Altay Bayindir", goalkeepers.get(0).getName());
+        assertEquals("巴因迪尔", goalkeepers.get(0).getChineseName());
+        assertEquals("https://img/altay.png", goalkeepers.get(0).getPhotoUrl());
+    }
+
+    @Test
+        void fallsBackToScorerChainWhenDbAndFootballDataAreEmpty() {
         Team team = Team.builder()
                 .id(6L)
                 .apiId(73L)
@@ -129,9 +165,11 @@ class TeamServiceTest {
         when(teamRepository.findById(73L)).thenReturn(Optional.empty());
         when(teamRepository.findByApiId(73L)).thenReturn(Optional.of(team));
         when(playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(73L)).thenReturn(List.of());
-        when(playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(6L)).thenReturn(List.of());
+        when(playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(6L))
+                .thenReturn(List.of())
+                .thenReturn(List.of(player(101L, "Son Heung-min", "Attacker", "7", "Korea Republic", "https://img/son.png")));
         when(footballDataProvider.fetchTeamSquad(73L)).thenReturn(List.of());
-        when(pulseliveProvider.fetchScorers()).thenReturn(List.of(
+        when(playerService.getTopScorers(100)).thenReturn(List.of(
                 new PlayerStat(null, 101L, "Son Heung-min", null, "Korea Republic",
                         "Attacker", "Forward", 7,
                         1001L, "Tottenham Hotspur", "Spurs", null, null,
@@ -141,15 +179,46 @@ class TeamServiceTest {
                         1002L, "Arsenal", "Arsenal", null, null,
                         12, 10, 0, 28, "https://img/saka.png")
         ));
+        when(playerRepository.findByApiId(101L)).thenReturn(Optional.empty());
+        when(playerRepository.save(any(Player.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         Map<String, Object> squad = teamService.getTeamSquad(73L);
 
         assertEquals(1, players(squad, "attackers").size());
         assertEquals("Son Heung-min", players(squad, "attackers").get(0).getName());
         assertEquals(1, squad.get("totalCount"));
+        assertFalse(squad.containsKey("all"));
 
         verify(footballDataProvider).fetchTeamSquad(73L);
-        verify(pulseliveProvider).fetchScorers();
+        verify(playerService).getTopScorers(100);
+        verify(playerRepository).save(argThat(player ->
+                player.getApiId().equals(101L)
+                        && player.getTeamId().equals(6L)
+                        && "https://img/son.png".equals(player.getPhotoUrl())
+        ));
+        verify(playerRepository, never()).save(argThat(player ->
+                player.getApiId() != null && player.getApiId().equals(202L)
+        ));
+    }
+
+    @Test
+    void savePlayerPreservesExistingBackfilledFieldsWhenIncomingValuesAreBlank() {
+        Player existing = player(20L, "Bukayo Saka", "Right Winger", "7", "England", "https://img/saka.png");
+        existing.setChineseName("\u8428\u5361");
+        existing.setChinesePosition("\u53f3\u8fb9\u950b");
+        existing.setTeamId(1L);
+
+        Player incoming = player(20L, "Bukayo Saka", "Right Winger", "7", "England", null);
+        incoming.setTeamId(1L);
+
+        when(playerRepository.findByApiId(20L)).thenReturn(Optional.of(existing));
+        when(playerRepository.save(any(Player.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Player saved = teamService.savePlayer(incoming);
+
+        assertEquals("\u8428\u5361", saved.getChineseName());
+        assertEquals("\u53f3\u8fb9\u950b", saved.getChinesePosition());
+        assertEquals("https://img/saka.png", saved.getPhotoUrl());
     }
 
     @SuppressWarnings("unchecked")
@@ -166,9 +235,10 @@ class TeamServiceTest {
         return player;
     }
 
-    private Player player(Long apiId, String name, String position, String shirtNumber, String nationality) {
+    private Player player(Long apiId, String name, String position, String shirtNumber, String nationality, String photoUrl) {
         Player player = player(apiId, name, position, shirtNumber);
         player.setNationality(nationality);
+        player.setPhotoUrl(photoUrl);
         return player;
     }
 }

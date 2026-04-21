@@ -17,12 +17,14 @@ import static org.mockito.Mockito.when;
 class PlPhotoProviderTest {
 
     private HttpClientUtil http;
+    private WikipediaPlayerPhotoProvider wikipediaPlayerPhotoProvider;
     private PlPhotoProvider provider;
 
     @BeforeEach
     void setUp() {
         http = mock(HttpClientUtil.class);
-        provider = new PlPhotoProvider(http);
+        wikipediaPlayerPhotoProvider = mock(WikipediaPlayerPhotoProvider.class);
+        provider = new PlPhotoProvider(http, wikipediaPlayerPhotoProvider);
     }
 
     @Test
@@ -55,6 +57,57 @@ class PlPhotoProviderTest {
         when(http.headOk(currentUrl, imageHeaders())).thenReturn(true);
 
         assertEquals(currentUrl, provider.findUsablePhotoUrl("Eli Junior Kroupi", legacyUrl));
+        verify(http, never()).getWithHeaders(anyString(), anyMap());
+    }
+
+    @Test
+    void fallsBackToWikipediaPhotoWhenOfficialAssetDoesNotExist() {
+        stubSearch("Ryan Kavuma-McQueen", "p616286");
+        String legacyUrl = "https://resources.premierleague.com/premierleague/photos/players/250x250/p616286.png";
+        String currentUrl = "https://resources.premierleague.com/premierleague25/photos/players/110x140/616286.png";
+        String smallUrl = "https://resources.premierleague.com/premierleague25/photos/players/40x40/616286.png";
+        when(http.headOk(legacyUrl, imageHeaders())).thenReturn(false);
+        when(http.headOk(currentUrl, imageHeaders())).thenReturn(false);
+        when(http.headOk(smallUrl, imageHeaders())).thenReturn(false);
+        when(wikipediaPlayerPhotoProvider.findPhotoUrl("Ryan Kavuma-McQueen"))
+                .thenReturn("https://upload.wikimedia.org/wikipedia/commons/9/99/Ryan_Kavuma-McQueen_2026.jpg");
+
+        assertEquals(
+                "https://upload.wikimedia.org/wikipedia/commons/9/99/Ryan_Kavuma-McQueen_2026.jpg",
+                provider.findPhotoUrl("Ryan Kavuma-McQueen")
+        );
+    }
+
+    @Test
+    void resolvesKnownOptaOverrideForChidoObiMartin() {
+        String legacyUrl = "https://resources.premierleague.com/premierleague/photos/players/250x250/p596047.png";
+        String currentUrl = "https://resources.premierleague.com/premierleague25/photos/players/110x140/596047.png";
+        when(http.headOk(legacyUrl, imageHeaders())).thenReturn(false);
+        when(http.headOk(currentUrl, imageHeaders())).thenReturn(true);
+
+        assertEquals(currentUrl, provider.findPhotoUrl("Chido Obi-Martin"));
+        verify(http, never()).getWithHeaders(anyString(), anyMap());
+    }
+
+    @Test
+    void resolvesKnownOptaOverrideForIfeoluwaIbrahim() {
+        String legacyUrl = "https://resources.premierleague.com/premierleague/photos/players/250x250/p616068.png";
+        String currentUrl = "https://resources.premierleague.com/premierleague25/photos/players/110x140/616068.png";
+        when(http.headOk(legacyUrl, imageHeaders())).thenReturn(false);
+        when(http.headOk(currentUrl, imageHeaders())).thenReturn(true);
+
+        assertEquals(currentUrl, provider.findPhotoUrl("Ifeoluwa Ibrahim"));
+        verify(http, never()).getWithHeaders(anyString(), anyMap());
+    }
+
+    @Test
+    void resolvesKnownOptaOverrideForCurlyApostropheName() {
+        String legacyUrl = "https://resources.premierleague.com/premierleague/photos/players/250x250/p645551.png";
+        String currentUrl = "https://resources.premierleague.com/premierleague25/photos/players/110x140/645551.png";
+        when(http.headOk(legacyUrl, imageHeaders())).thenReturn(false);
+        when(http.headOk(currentUrl, imageHeaders())).thenReturn(true);
+
+        assertEquals(currentUrl, provider.findPhotoUrl("Ceadach O’Neill"));
         verify(http, never()).getWithHeaders(anyString(), anyMap());
     }
 

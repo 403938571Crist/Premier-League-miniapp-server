@@ -12,6 +12,7 @@ import com.premierleague.server.provider.PlPhotoProvider;
 import com.premierleague.server.provider.PulseliveProvider;
 import com.premierleague.server.provider.UnderstatProvider;
 import com.premierleague.server.repository.PlayerRepository;
+import com.premierleague.server.util.PlayerChineseNameMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
@@ -65,12 +66,13 @@ public class PlayerService {
      * 
      * 先查数据库，没有则从 API 获取并保存
      */
-    @Cacheable(value = "playerDetail", key = "#playerId")
+    @Cacheable(value = "playerDetail", key = "#playerId", unless = "#result == null")
     public Optional<Player> getPlayerById(Long playerId) {
         log.info("[PlayerService] Getting player: {}", playerId);
         
         // 1. 先查数据库
-        Optional<Player> playerOpt = playerRepository.findById(playerId);
+        Optional<Player> playerOpt = playerRepository.findById(playerId)
+                .or(() -> playerRepository.findByApiId(playerId));
         if (playerOpt.isPresent()) {
             return playerOpt;
         }
@@ -90,7 +92,7 @@ public class PlayerService {
     /**
      * 根据 API ID 获取球员
      */
-    @Cacheable(value = "playerByApiId", key = "#apiId")
+    @Cacheable(value = "playerByApiId", key = "#apiId", unless = "#result == null")
     public Optional<Player> getPlayerByApiId(Long apiId) {
         log.info("[PlayerService] Getting player by apiId: {}", apiId);
         
@@ -256,23 +258,16 @@ public class PlayerService {
 
     /**
      * 射手数据源优先级（依次降级）：
-     *   1. football-data.org /competitions/PL/scorers   （付费端点，免费档 403）
-     *   2. api-football /players/topscorers             （免费档 100 req/天，稳定 JSON，首选兜底）
-     *   3. understat.com /main/getPlayersStats/         （国内直连无墙，JSON 结构最干净）
-     *   4. pulselive v3 leaderboard                     （英超官方，dev 被 GFW DNS 污染）
-     *   5. fbref.com Standard Stats                     （Cloudflare JS challenge，需 FlareSolverr）
+     *   1. api-football /players/topscorers             （免费档 100 req/天，稳定 JSON，首选兜底）
+     *   2. understat.com /main/getPlayersStats/         （国内直连无墙，JSON 结构最干净）
+     *   3. pulselive v3 leaderboard                     （英超官方，dev 被 GFW DNS 污染）
+     *   4. fbref.com Standard Stats                     （Cloudflare JS challenge，需 FlareSolverr）
+     *   5. football-data.org /competitions/PL/scorers   （付费端点，当前环境常见 403/超时，最后兜底）
      *
      * 全部空时返回空列表；上游 getTopScorers 会抛 DataUnavailableException → 503
      */
     private List<PlayerStat> fetchScorersWithFallback(int limit) {
         List<PlayerStat> result;
-
-        result = footballDataProvider.fetchScorers(limit);
-        if (result != null && !result.isEmpty()) {
-            log.debug("[PlayerService] Using football-data.org scorers ({} rows)", result.size());
-            return result;
-        }
-        log.info("[PlayerService] football-data scorers unavailable, trying api-football");
 
         result = apiFootballProvider.fetchScorers();
         if (result != null && !result.isEmpty()) {
@@ -298,6 +293,14 @@ public class PlayerService {
         result = fbrefProvider.fetchScorers();
         if (result != null && !result.isEmpty()) {
             log.info("[PlayerService] Using fbref scorers ({} rows)", result.size());
+            return result;
+        }
+
+        log.info("[PlayerService] fbref unavailable, trying football-data as final fallback");
+
+        result = footballDataProvider.fetchScorers(limit);
+        if (result != null && !result.isEmpty()) {
+            log.info("[PlayerService] Using football-data.org scorers ({} rows)", result.size());
             return result;
         }
 
@@ -361,14 +364,7 @@ public class PlayerService {
     }
 
     private String mapPlayerToChinese(String playerName) {
-        if (playerName == null || playerName.isBlank()) {
-            return null;
-        }
-        String hit = PLAYER_ZH.get(playerName);
-        if (hit != null) {
-            return hit;
-        }
-        return PLAYER_ZH.get(stripAccents(playerName));
+        return PlayerChineseNameMapper.map(playerName);
     }
 
     private static String stripAccents(String s) {

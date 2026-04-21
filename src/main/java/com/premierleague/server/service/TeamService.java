@@ -7,10 +7,11 @@ import com.premierleague.server.entity.Team;
 import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.provider.FootballDataProvider;
 import com.premierleague.server.provider.PlPhotoProvider;
-import com.premierleague.server.provider.PulseliveProvider;
 import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
 import com.premierleague.server.repository.TeamRepository;
+import com.premierleague.server.util.PlayerChineseNameMapper;
+import com.premierleague.server.util.PlayerNameNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
@@ -40,7 +41,7 @@ public class TeamService {
     private final MatchRepository matchRepository;
     private final FootballDataProvider footballDataProvider;
     private final PlPhotoProvider plPhotoProvider;
-    private final PulseliveProvider pulseliveProvider;
+    private final PlayerService playerService;
     private final SqlCacheService sqlCache;
 
     private static final Duration SQL_CACHE_TTL_STANDINGS = Duration.ofMinutes(30);
@@ -209,6 +210,10 @@ public class TeamService {
         if (allPlayers.isEmpty() && teamOpt.isPresent()) {
             Long storageTeamId = teamOpt.get().getId() != null ? teamOpt.get().getId() : teamId;
             allPlayers = fetchSquadFromPulseliveLeaderboard(teamOpt.get(), storageTeamId);
+            if (!allPlayers.isEmpty()) {
+                savePlayers(allPlayers);
+                allPlayers = findPlayersForTeam(teamId, teamOpt);
+            }
         }
 
         List<Player> enrichedPlayers = enrichPlayersForDisplay(allPlayers);
@@ -228,7 +233,6 @@ public class TeamService {
         squad.put("attackers", attackers);
         squad.put("forwards", attackers);
         squad.put("others", others);
-        squad.put("all", enrichedPlayers);
         squad.put("totalCount", enrichedPlayers.size());
         
         return squad;
@@ -236,13 +240,17 @@ public class TeamService {
 
     private List<Player> findPlayersForTeam(Long requestedTeamId, Optional<Team> teamOpt) {
         Map<String, Player> merged = new LinkedHashMap<>();
-        addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(requestedTeamId));
+        if (teamOpt.isPresent() && teamOpt.get().getId() != null) {
+            addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(teamOpt.get().getId()));
+        }
+        if (requestedTeamId != null && teamOpt.map(Team::getId).filter(requestedTeamId::equals).isEmpty()) {
+            addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(requestedTeamId));
+        }
         if (teamOpt.isPresent()) {
             Team team = teamOpt.get();
-            if (team.getId() != null && !team.getId().equals(requestedTeamId)) {
-                addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(team.getId()));
-            }
-            if (team.getApiId() != null && !team.getApiId().equals(requestedTeamId)) {
+            if (team.getApiId() != null
+                    && !team.getApiId().equals(requestedTeamId)
+                    && !team.getApiId().equals(team.getId())) {
                 addPlayers(merged, playerRepository.findByTeamIdOrderByPositionAscShirtNumberAsc(team.getApiId()));
             }
         }
@@ -253,11 +261,21 @@ public class TeamService {
 
     private void addPlayers(Map<String, Player> merged, List<Player> players) {
         for (Player player : players) {
-            merged.putIfAbsent(playerIdentity(player), player);
+            String key = playerIdentity(player);
+            Player existing = merged.get(key);
+            if (existing == null) {
+                merged.put(key, player);
+            } else {
+                mergePlayerDisplayFields(existing, player);
+            }
         }
     }
 
     private String playerIdentity(Player player) {
+        String normalizedName = PlayerNameNormalizer.normalize(player.getName());
+        if (!normalizedName.isBlank()) {
+            return "name:" + normalizedName;
+        }
         if (player.getApiId() != null) {
             return "api:" + player.getApiId();
         }
@@ -267,9 +285,42 @@ public class TeamService {
         return "name:" + player.getName();
     }
 
+    private void mergePlayerDisplayFields(Player preferred, Player fallback) {
+        if (!hasText(preferred.getChineseName()) && hasText(fallback.getChineseName())) {
+            preferred.setChineseName(fallback.getChineseName());
+        }
+        if (!hasText(preferred.getPhotoUrl()) && hasText(fallback.getPhotoUrl())) {
+            preferred.setPhotoUrl(fallback.getPhotoUrl());
+        }
+        if (!hasText(preferred.getShirtNumber()) && hasText(fallback.getShirtNumber())) {
+            preferred.setShirtNumber(fallback.getShirtNumber());
+        }
+        if (!hasText(preferred.getPosition()) && hasText(fallback.getPosition())) {
+            preferred.setPosition(fallback.getPosition());
+        }
+        if (!hasText(preferred.getChinesePosition()) && hasText(fallback.getChinesePosition())) {
+            preferred.setChinesePosition(fallback.getChinesePosition());
+        }
+        if (!hasText(preferred.getNationality()) && hasText(fallback.getNationality())) {
+            preferred.setNationality(fallback.getNationality());
+        }
+        if (preferred.getDateOfBirth() == null && fallback.getDateOfBirth() != null) {
+            preferred.setDateOfBirth(fallback.getDateOfBirth());
+        }
+        if (preferred.getHeight() == null && fallback.getHeight() != null) {
+            preferred.setHeight(fallback.getHeight());
+        }
+        if (preferred.getWeight() == null && fallback.getWeight() != null) {
+            preferred.setWeight(fallback.getWeight());
+        }
+        if (!hasText(preferred.getFoot()) && hasText(fallback.getFoot())) {
+            preferred.setFoot(fallback.getFoot());
+        }
+    }
+
     private List<Player> fetchSquadFromPulseliveLeaderboard(Team team, Long storageTeamId) {
         try {
-            List<PlayerStat> stats = pulseliveProvider.fetchScorers();
+            List<PlayerStat> stats = playerService.getTopScorers(100);
             if (stats == null || stats.isEmpty()) {
                 return List.of();
             }
@@ -339,7 +390,7 @@ public class TeamService {
         player.setApiId(stat.playerId());
         player.setTeamId(teamId);
         player.setName(stat.playerName());
-        player.setChineseName(stat.chineseName());
+        player.setChineseName(hasText(stat.chineseName()) ? stat.chineseName() : PlayerChineseNameMapper.map(stat.playerName()));
         player.setNationality(stat.nationality());
         player.setPosition(stat.position());
         player.setChinesePosition(stat.chinesePosition());
@@ -369,11 +420,6 @@ public class TeamService {
         String positionLabel = player.getPositionLabel();
         if (positionLabel != null && !positionLabel.isBlank()) {
             player.setChinesePosition(positionLabel);
-        }
-
-        String resolvedPhotoUrl = plPhotoProvider.findUsablePhotoUrl(player.getName(), player.getPhotoUrl());
-        if (resolvedPhotoUrl != null && !resolvedPhotoUrl.isBlank()) {
-            player.setPhotoUrl(resolvedPhotoUrl);
         }
 
         return player;
@@ -527,14 +573,20 @@ public class TeamService {
             // 更新
             Player existingPlayer = existing.get();
             existingPlayer.setName(player.getName());
-            existingPlayer.setChineseName(player.getChineseName());
+            if (hasText(player.getChineseName())) {
+                existingPlayer.setChineseName(player.getChineseName());
+            }
             existingPlayer.setPosition(player.getPosition());
-            existingPlayer.setChinesePosition(player.getChinesePosition());
+            if (hasText(player.getChinesePosition())) {
+                existingPlayer.setChinesePosition(player.getChinesePosition());
+            }
             existingPlayer.setShirtNumber(player.getShirtNumber());
             existingPlayer.setNationality(player.getNationality());
             existingPlayer.setDateOfBirth(player.getDateOfBirth());
             existingPlayer.setTeamId(player.getTeamId());
-            existingPlayer.setPhotoUrl(player.getPhotoUrl());
+            if (hasText(player.getPhotoUrl())) {
+                existingPlayer.setPhotoUrl(player.getPhotoUrl());
+            }
             return playerRepository.save(existingPlayer);
         } else {
             // 新建
@@ -555,5 +607,9 @@ public class TeamService {
             }
         }
         return saved;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

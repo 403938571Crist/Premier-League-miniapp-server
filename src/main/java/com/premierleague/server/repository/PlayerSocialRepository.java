@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 球员社媒 Repository
@@ -31,4 +32,6 @@ public interface PlayerSocialRepository extends JpaRepository<PlayerSocial, Stri
      * 根据球队ID和平台查询
      */
     List<PlayerSocial> findByTeamIdAndPlatform(Long teamId, String platform);
+
+    Optional<PlayerSocial> findByPlayerIdAndPlatformIgnoreCase(Long playerId, String platform);
 }

@@ -2,10 +2,12 @@ package com.premierleague.server.repository;
 
 import com.premierleague.server.entity.Player;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,6 +31,10 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
      * 按位置分组查询球员
      */
     List<Player> findByTeamIdAndPositionOrderByShirtNumberAsc(Long teamId, String position);
+
+    List<Player> findByTeamIdInOrderByTeamIdAscNameAsc(List<Long> teamIds);
+
+    List<Player> findByTeamIdAndDateOfBirthOrderByIdAsc(Long teamId, LocalDate dateOfBirth);
     
     /**
      * 查询门将
@@ -65,4 +71,23 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
      */
     @Query("SELECT p FROM Player p WHERE p.teamId = :teamId AND p.marketValue IS NOT NULL ORDER BY p.marketValue DESC")
     List<Player> findMostValuablePlayersByTeamId(@Param("teamId") Long teamId);
+
+    @Query("""
+            SELECT p FROM Player p
+            WHERE (p.photoUrl IS NULL OR p.photoUrl = '')
+               OR (p.chineseName IS NULL OR p.chineseName = '')
+            ORDER BY p.id ASC
+            """)
+    List<Player> findPlayersNeedingProfileBackfill(Pageable pageable);
+
+    @Query("""
+            SELECT p FROM Player p
+            WHERE p.teamId IN :teamIds
+              AND ((p.photoUrl IS NULL OR p.photoUrl = '')
+               OR (p.chineseName IS NULL OR p.chineseName = ''))
+            ORDER BY p.id ASC
+            """)
+    List<Player> findPlayersNeedingProfileBackfillByTeamIds(
+            @Param("teamIds") List<Long> teamIds,
+            Pageable pageable);
 }
