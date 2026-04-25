@@ -347,7 +347,8 @@ public class PlayerService {
                 chineseName = mapPlayerToChinese(s.playerName());
             }
 
-            String photoUrl = plPhotoProvider.findUsablePhotoUrl(s.playerName(), s.photoUrl());
+            String photoUrl = findStoredPhotoUrl(s.playerName())
+                    .orElseGet(() -> plPhotoProvider.findUsablePhotoUrl(s.playerName(), s.photoUrl()));
 
             result.add(new PlayerStat(
                     displayRank,
@@ -361,6 +362,21 @@ public class PlayerService {
             prevAssists = s.assists();
         }
         return result;
+    }
+
+    private Optional<String> findStoredPhotoUrl(String playerName) {
+        Optional<Player> exactMatch = playerRepository.findFirstWithPhotoByNameIgnoreCase(playerName);
+        if (exactMatch.isPresent()) {
+            return Optional.of(exactMatch.get().getPhotoUrl());
+        }
+
+        String normalized = stripAccents(playerName);
+        if (!normalized.equals(playerName)) {
+            return playerRepository.findFirstWithPhotoByNameIgnoreCase(normalized)
+                    .map(Player::getPhotoUrl);
+        }
+
+        return Optional.empty();
     }
 
     private String mapPlayerToChinese(String playerName) {

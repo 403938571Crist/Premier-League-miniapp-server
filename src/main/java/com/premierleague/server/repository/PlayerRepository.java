@@ -2,6 +2,7 @@ package com.premierleague.server.repository;
 
 import com.premierleague.server.entity.Player;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -74,6 +75,26 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
 
     @Query("""
             SELECT p FROM Player p
+            WHERE LOWER(p.name) = LOWER(:name)
+              AND p.photoUrl IS NOT NULL
+              AND p.photoUrl <> ''
+            ORDER BY p.id ASC
+            """)
+    List<Player> findWithPhotoByNameIgnoreCase(
+            @Param("name") String name,
+            Pageable pageable);
+
+    default Optional<Player> findFirstWithPhotoByNameIgnoreCase(String name) {
+        if (name == null || name.isBlank()) {
+            return Optional.empty();
+        }
+        return findWithPhotoByNameIgnoreCase(name, PageRequest.of(0, 1))
+                .stream()
+                .findFirst();
+    }
+
+    @Query("""
+            SELECT p FROM Player p
             WHERE (p.photoUrl IS NULL OR p.photoUrl = '')
                OR (p.chineseName IS NULL OR p.chineseName = '')
             ORDER BY p.id ASC
@@ -90,4 +111,10 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
     List<Player> findPlayersNeedingProfileBackfillByTeamIds(
             @Param("teamIds") List<Long> teamIds,
             Pageable pageable);
+
+    /**
+     * 按 name 全等匹配 (accent 已经在调用端 normalize 过，为了命中 "João Pedro" / "Joao Pedro" 都传即可)。
+     * 给 "refresh-transfer-photos" 用：不带 teamId 限制，扫 DB 里所有同名行（包括 team_id 是 FD apiId 的孤儿行）。
+     */
+    List<Player> findByName(String name);
 }

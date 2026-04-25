@@ -4,6 +4,7 @@ import com.premierleague.server.dto.ApiResponse;
 import com.premierleague.server.dto.AuthSessionRequest;
 import com.premierleague.server.dto.AuthSessionView;
 import com.premierleague.server.service.AuthService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -17,7 +18,7 @@ public class AuthController {
     private final AuthService authService;
 
     @PostMapping("/session")
-    public ResponseEntity<ApiResponse<AuthSessionView>> createSession(@RequestBody(required = false) AuthSessionRequest request) {
+    public ResponseEntity<ApiResponse<AuthSessionView>> createSession(@Valid @RequestBody(required = false) AuthSessionRequest request) {
         AuthSessionView sessionView = authService.createAnonymousSession(request);
         HttpHeaders headers = authService.buildSessionHeaders(sessionView);
         return ResponseEntity.ok()

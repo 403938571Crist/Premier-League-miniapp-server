@@ -7,6 +7,7 @@ import com.premierleague.server.entity.Team;
 import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.provider.FootballDataProvider;
 import com.premierleague.server.provider.PlPhotoProvider;
+import com.premierleague.server.provider.PulseliveStandingsProvider;
 import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
 import com.premierleague.server.repository.TeamRepository;
@@ -40,6 +41,7 @@ public class TeamService {
     private final PlayerRepository playerRepository;
     private final MatchRepository matchRepository;
     private final FootballDataProvider footballDataProvider;
+    private final PulseliveStandingsProvider pulseliveStandingsProvider;
     private final PlPhotoProvider plPhotoProvider;
     private final PlayerService playerService;
     private final SqlCacheService sqlCache;
@@ -73,8 +75,13 @@ public class TeamService {
         // 3. L3: real-time API (rate-limited)
         log.info("[TeamService] Not enough standings in DB ({} teams), fetching from API", standings.size());
         List<Team> apiStandings = footballDataProvider.fetchStandings();
+        if (apiStandings.isEmpty()) {
+            // Football-Data.org 没返回（无 token / 超限 / 错误）→ 回退 Pulselive 公开 API
+            log.warn("[TeamService] Football-Data returned empty, falling back to Pulselive");
+            apiStandings = pulseliveStandingsProvider.fetchStandings();
+        }
         if (!apiStandings.isEmpty()) {
-            standings = saveTeams(apiStandings);
+            standings = saveTeamsForStandings(apiStandings);
             sqlCache.set("standings:all", standings, SQL_CACHE_TTL_STANDINGS);
         }
 
@@ -108,11 +115,15 @@ public class TeamService {
         if (teams.isEmpty()) {
             log.info("[TeamService] No teams in DB, fetching from API");
             List<Team> apiTeams = footballDataProvider.fetchStandings();
+            if (apiTeams.isEmpty()) {
+                log.warn("[TeamService] Football-Data returned empty teams, falling back to Pulselive");
+                apiTeams = pulseliveStandingsProvider.fetchStandings();
+            }
             if (!apiTeams.isEmpty()) {
-                teams = saveTeams(apiTeams);
+                teams = saveTeamsForStandings(apiTeams);
             }
         }
-        
+
         return teams;
     }
 
@@ -561,6 +572,113 @@ public class TeamService {
             }
         }
         return saved;
+    }
+
+    /**
+     * 批量保存球队（积分榜专用版）：
+     *   - Pulselive fallback 返回的 Team.apiId=null，走不了 findByApiId 这条普通 upsert 路径。
+     *     如果照旧调 saveTeam，会插入 20 行全新数据污染 teams 表。
+     *   - 这里对 apiId 为空的 Team，依次用 shortName / chineseName / canonical 名字匹配现有行，
+     *     只更新战绩字段（position/points/won/draw/lost/goalsFor/goalsAgainst/goalDifference/playedGames），
+     *     保留 DB 里的 apiId / venue / founded / crestUrl 等。
+     *   - 匹配不上就跳过（不插入新行，避免赛季升降级时的残留与 FD id 混入）。
+     */
+    public List<Team> saveTeamsForStandings(List<Team> fetched) {
+        List<Team> saved = new ArrayList<>();
+        List<Team> existingAll = null;
+
+        for (Team t : fetched) {
+            try {
+                if (t.getApiId() != null) {
+                    // 有 apiId（来自 Football-Data.org），走老 saveTeam
+                    saved.add(saveTeam(t));
+                    continue;
+                }
+
+                // apiId=null（来自 Pulselive fallback），按名字找 DB 里已有行
+                Team match = null;
+                if (hasText(t.getShortName())) {
+                    match = teamRepository.findByShortName(t.getShortName()).orElse(null);
+                }
+                if (match == null && hasText(t.getChineseName())) {
+                    match = teamRepository.findByChineseName(t.getChineseName()).orElse(null);
+                }
+                if (match == null) {
+                    if (existingAll == null) existingAll = teamRepository.findAll();
+                    match = findByCanonicalName(existingAll, t);
+                }
+
+                if (match == null) {
+                    log.warn("[TeamService] Pulselive team not matched in DB, skip: name='{}' shortName='{}'",
+                            t.getName(), t.getShortName());
+                    continue;
+                }
+
+                // 只更新战绩相关字段
+                match.setPosition(t.getPosition());
+                match.setPlayedGames(t.getPlayedGames());
+                match.setWon(t.getWon());
+                match.setDraw(t.getDraw());
+                match.setLost(t.getLost());
+                match.setPoints(t.getPoints());
+                match.setGoalsFor(t.getGoalsFor());
+                match.setGoalsAgainst(t.getGoalsAgainst());
+                match.setGoalDifference(t.getGoalDifference());
+                // 中文名：缺失或当前还是英文占位（等同 name/shortName、或无 CJK 字符）时用 Pulselive 的真中文名覆盖
+                if (hasText(t.getChineseName())
+                        && containsCjk(t.getChineseName())
+                        && (!hasText(match.getChineseName())
+                                || isEnglishPlaceholder(match.getChineseName(), match.getName(), match.getShortName()))) {
+                    match.setChineseName(t.getChineseName());
+                }
+                // 队徽缺失就补
+                if (!hasText(match.getCrestUrl()) && hasText(t.getCrestUrl())) {
+                    match.setCrestUrl(t.getCrestUrl());
+                }
+                saved.add(teamRepository.save(match));
+            } catch (Exception e) {
+                log.error("[TeamService] Failed to save standings team {}: {}", t.getName(), e.getMessage());
+            }
+        }
+        return saved;
+    }
+
+    private static boolean containsCjk(String s) {
+        if (s == null) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x4E00 && c <= 0x9FFF) return true; // CJK Unified Ideographs
+        }
+        return false;
+    }
+
+    /**
+     * 判断当前 chineseName 字段是不是"英文占位"——
+     *   - 和 name 或 shortName 本质相等（去掉 FC/空白/大小写）
+     *   - 或者根本不含任何中文字符
+     * 这类值应该被 Pulselive 提供的真中文名覆盖。
+     */
+    private static boolean isEnglishPlaceholder(String chineseName, String name, String shortName) {
+        if (chineseName == null || chineseName.isBlank()) return true;
+        if (!containsCjk(chineseName)) return true;
+        // 保险：若 containsCjk 已为 true，就认为是真中文名（走不到这里）
+        return false;
+    }
+
+    private Team findByCanonicalName(List<Team> existing, Team fetched) {
+        String keyName = canonicalTeamKey(fetched.getName());
+        String keyShort = canonicalTeamKey(fetched.getShortName());
+        for (Team e : existing) {
+            String eKeyName = canonicalTeamKey(e.getName());
+            String eKeyShort = canonicalTeamKey(e.getShortName());
+            if (isMatchingTeamKey(keyName, eKeyName)
+                    || isMatchingTeamKey(keyName, eKeyShort)
+                    || isMatchingTeamKey(keyShort, eKeyName)
+                    || isMatchingTeamKey(keyShort, eKeyShort)) {
+                return e;
+            }
+        }
+        return null;
     }
 
     /**

@@ -139,6 +139,10 @@ public final class PlayerChineseNameMapper {
         addPlayer("Diego León", "迭戈·莱昂", "Diego Leon");
         addPlayer("Radu Drăgușin", "德拉古辛", "Radu Dragusin");
         addPlayer("Christopher Nkunku", "克里斯托弗·恩昆库");
+        // 近期转会 / 常见缺失
+        addPlayer("Jack Grealish", "格拉利什");
+        addPlayer("Antoine Semenyo", "塞门约");
+        addPlayer("Jadon Sancho", "桑乔");
     }
 
     private PlayerChineseNameMapper() {

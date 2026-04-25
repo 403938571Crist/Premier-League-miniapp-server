@@ -5,11 +5,13 @@ import com.premierleague.server.entity.Player;
 import com.premierleague.server.entity.SyncLog;
 import com.premierleague.server.entity.Team;
 import com.premierleague.server.provider.FootballDataProvider;
+import com.premierleague.server.provider.PulseliveStandingsProvider;
 import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
 import com.premierleague.server.repository.SyncLogRepository;
 import com.premierleague.server.repository.TeamRepository;
 import com.premierleague.server.service.PlayerProfileBackfillService;
+import com.premierleague.server.service.TeamService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -33,11 +35,13 @@ import java.util.Optional;
 public class FootballDataSyncScheduler {
 
     private final FootballDataProvider footballDataProvider;
+    private final PulseliveStandingsProvider pulseliveStandingsProvider;
     private final TeamRepository teamRepository;
     private final MatchRepository matchRepository;
     private final PlayerRepository playerRepository;
     private final SyncLogRepository syncLogRepository;
     private final PlayerProfileBackfillService playerProfileBackfillService;
+    private final TeamService teamService;
 
     @Value("${football-data.sync.enabled:true}")
     private boolean syncEnabled;
@@ -179,69 +183,59 @@ public class FootballDataSyncScheduler {
 
     /**
      * 同步积分榜
+     *
+     * 策略：
+     *   1. 先跑 Football-Data.org（有 token 时首选，字段全、apiId 稳）
+     *   2. 空结果 → fallback 到 Pulselive 公开 API（无 token，Premier League 官网同源）
+     *   3. 两个都空才算 FAILED
+     *
+     * upsert 统一交给 TeamService.saveTeamsForStandings — 它会对 apiId=null 的 Pulselive 数据
+     * 按 shortName / chineseName / canonical name 匹配现有行，避免 INSERT 污染 teams 表。
      */
     @Transactional
     public SyncLog syncStandings() {
         long startTime = System.currentTimeMillis();
         SyncLog.SyncLogBuilder logBuilder = SyncLog.builder()
             .syncType("STANDINGS")
-            .syncTime(LocalDateTime.now())
-            .source("football-data.org");
+            .syncTime(LocalDateTime.now());
 
         try {
             log.info("[FootballDataSyncScheduler] Syncing standings from football-data.org");
-            
             List<Team> teams = footballDataProvider.fetchStandings();
-            
+            String source = "football-data.org";
+
             if (teams.isEmpty()) {
-                log.warn("[FootballDataSyncScheduler] No standings data fetched");
+                log.warn("[FootballDataSyncScheduler] Football-Data empty, falling back to Pulselive");
+                teams = pulseliveStandingsProvider.fetchStandings();
+                source = "pulselive";
+            }
+
+            logBuilder.source(source);
+
+            if (teams.isEmpty()) {
+                log.warn("[FootballDataSyncScheduler] No standings data fetched from either source");
                 logBuilder.status("FAILED")
                     .itemsCount(0)
-                    .errorMessage("No data fetched from API");
+                    .errorMessage("No data fetched from football-data.org or pulselive");
                 return saveSyncLog(logBuilder, startTime);
             }
 
-            int successCount = 0;
-            int failCount = 0;
-            
-            for (Team team : teams) {
-                try {
-                    // 检查是否已存在
-                    Optional<Team> existing = teamRepository.findByApiId(team.getApiId());
-                    if (existing.isPresent()) {
-                        // 更新
-                        Team existingTeam = existing.get();
-                        existingTeam.setPosition(team.getPosition());
-                        existingTeam.setPlayedGames(team.getPlayedGames());
-                        existingTeam.setWon(team.getWon());
-                        existingTeam.setDraw(team.getDraw());
-                        existingTeam.setLost(team.getLost());
-                        existingTeam.setPoints(team.getPoints());
-                        existingTeam.setGoalsFor(team.getGoalsFor());
-                        existingTeam.setGoalsAgainst(team.getGoalsAgainst());
-                        existingTeam.setGoalDifference(team.getGoalDifference());
-                        teamRepository.save(existingTeam);
-                    } else {
-                        // 新建
-                        teamRepository.save(team);
-                    }
-                    successCount++;
-                } catch (Exception e) {
-                    log.error("[FootballDataSyncScheduler] Failed to save team {}: {}", team.getName(), e.getMessage());
-                    failCount++;
-                }
-            }
+            List<Team> saved = teamService.saveTeamsForStandings(teams);
+            int successCount = saved.size();
+            int failCount = teams.size() - successCount;
 
             String status = failCount > 0 ? (successCount > 0 ? "PARTIAL" : "FAILED") : "SUCCESS";
             logBuilder.status(status)
                 .itemsCount(teams.size())
                 .successCount(successCount)
                 .failCount(failCount)
-                .detailLog(String.format("Synced %d teams, %d success, %d failed", teams.size(), successCount, failCount));
-            
+                .detailLog(String.format("source=%s fetched=%d upserted=%d skipped=%d",
+                    source, teams.size(), successCount, failCount));
+
             lastStandingsSync = LocalDateTime.now();
-            log.info("[FootballDataSyncScheduler] Standings sync completed: {} success, {} failed", successCount, failCount);
-            
+            log.info("[FootballDataSyncScheduler] Standings sync completed via {}: {} success, {} failed",
+                source, successCount, failCount);
+
         } catch (Exception e) {
             log.error("[FootballDataSyncScheduler] Standings sync failed: {}", e.getMessage());
             logBuilder.status("FAILED")

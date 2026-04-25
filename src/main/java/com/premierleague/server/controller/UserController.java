@@ -4,6 +4,7 @@ import com.premierleague.server.dto.ApiResponse;
 import com.premierleague.server.dto.AuthUserView;
 import com.premierleague.server.dto.UpdateProfileRequest;
 import com.premierleague.server.service.AuthService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -30,7 +31,7 @@ public class UserController {
     public ResponseEntity<ApiResponse<AuthUserView>> updateCurrentUser(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
             @RequestHeader(value = AuthService.SESSION_HEADER, required = false) String sessionToken,
-            @RequestBody(required = false) UpdateProfileRequest request) {
+            @Valid @RequestBody(required = false) UpdateProfileRequest request) {
         String token = authService.resolveToken(authorization, sessionToken);
         return authService.updateProfile(token, request)
                 .map(view -> ResponseEntity.ok(ApiResponse.ok(view)))

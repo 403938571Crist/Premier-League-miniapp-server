@@ -1,6 +1,7 @@
 package com.premierleague.server.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.premierleague.server.entity.Player;
 import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.provider.ApiFootballProvider;
 import com.premierleague.server.provider.FbrefProvider;
@@ -105,6 +106,46 @@ class PlayerServiceTest {
         verify(understatProvider).fetchScorers();
         verify(footballDataProvider, never()).fetchScorers(10);
         verify(sqlCache).set(eq("topAssists:5"), any(), eq(Duration.ofHours(2)));
+    }
+
+    @Test
+    void topScorersUsesDatabasePhotoBeforeRemoteLookup() {
+        PlayerRepository playerRepository = mock(PlayerRepository.class);
+        FootballDataProvider footballDataProvider = mock(FootballDataProvider.class);
+        ApiFootballProvider apiFootballProvider = mock(ApiFootballProvider.class);
+        UnderstatProvider understatProvider = mock(UnderstatProvider.class);
+        PulseliveProvider pulseliveProvider = mock(PulseliveProvider.class);
+        FbrefProvider fbrefProvider = mock(FbrefProvider.class);
+        PlPhotoProvider plPhotoProvider = mock(PlPhotoProvider.class);
+        SqlCacheService sqlCache = mock(SqlCacheService.class);
+
+        PlayerService service = new PlayerService(
+                playerRepository,
+                footballDataProvider,
+                apiFootballProvider,
+                understatProvider,
+                pulseliveProvider,
+                fbrefProvider,
+                plPhotoProvider,
+                sqlCache
+        );
+
+        PlayerStat understatRow = stat("Erling Haaland", 23, 7, null);
+        Player dbPlayer = Player.builder()
+                .name("Erling Haaland")
+                .photoUrl("https://db/haaland.png")
+                .build();
+
+        when(sqlCache.get(eq("topScorers:5"), any(TypeReference.class))).thenReturn(Optional.empty());
+        when(apiFootballProvider.fetchScorers()).thenReturn(List.of());
+        when(understatProvider.fetchScorers()).thenReturn(List.of(understatRow));
+        when(playerRepository.findFirstWithPhotoByNameIgnoreCase("Erling Haaland")).thenReturn(Optional.of(dbPlayer));
+
+        List<PlayerStat> result = service.getTopScorers(5);
+
+        assertEquals(1, result.size());
+        assertEquals("https://db/haaland.png", result.get(0).photoUrl());
+        verify(plPhotoProvider, never()).findUsablePhotoUrl(any(), any());
     }
 
     private PlayerStat stat(String name, int goals, int assists, String photoUrl) {

@@ -131,7 +131,10 @@ public class PlayerProfileBackfillService {
         String normalizedRight = normalizeName(right);
         return normalizedLeft.equals(normalizedRight)
                 || normalizedLeft.contains(normalizedRight)
-                || normalizedRight.contains(normalizedLeft);
+                || normalizedRight.contains(normalizedLeft)
+                || compactName(normalizedLeft).equals(compactName(normalizedRight))
+                || sharesSurname(normalizedLeft, normalizedRight)
+                || hasSingleTokenAlias(normalizedLeft, normalizedRight);
     }
 
     private String normalizeName(String value) {
@@ -144,6 +147,32 @@ public class PlayerProfileBackfillService {
         return normalized.replaceAll("[^a-z0-9' ]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
+    }
+
+    private String compactName(String value) {
+        return value.replace(" ", "")
+                .replace("'", "");
+    }
+
+    private boolean sharesSurname(String left, String right) {
+        String[] leftTokens = left.split(" ");
+        String[] rightTokens = right.split(" ");
+        if (leftTokens.length < 2 || rightTokens.length < 2) {
+            return false;
+        }
+        return leftTokens[leftTokens.length - 1].equals(rightTokens[rightTokens.length - 1]);
+    }
+
+    private boolean hasSingleTokenAlias(String left, String right) {
+        String[] leftTokens = left.split(" ");
+        String[] rightTokens = right.split(" ");
+        if (leftTokens.length == 1 && rightTokens.length >= 1) {
+            return leftTokens[0].equals(rightTokens[0]);
+        }
+        if (rightTokens.length == 1 && leftTokens.length >= 1) {
+            return rightTokens[0].equals(leftTokens[0]);
+        }
+        return false;
     }
 
     public record BackfillResult(
