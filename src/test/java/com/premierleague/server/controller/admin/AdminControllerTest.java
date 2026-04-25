@@ -23,7 +23,7 @@ import static org.mockito.Mockito.when;
 class AdminControllerTest {
 
     @Test
-    void sourceStatusAndHealthExcludeDisabledProviders() {
+    void sourceStatusExcludesDisabledProviders() {
         NewsProvider enabledProvider = provider("romano", "Romano", true);
         NewsProvider disabledProvider = provider("x", "X", false);
 
@@ -39,13 +39,11 @@ class AdminControllerTest {
                 new ConcurrentMapCacheManager("newsList", "newsDetail", "transferNews", "socialPlayers")
         );
 
+        // /api/admin/health 已移除（与 /actuator/health 重叠），只验证 source-status
         ApiResponse<List<Map<String, Object>>> sourceStatus = controller.getSourceStatus();
-        ApiResponse<Map<String, Object>> health = controller.healthCheck();
 
         assertEquals(1, sourceStatus.data().size());
         assertEquals("romano", sourceStatus.data().get(0).get("sourceType"));
-        assertEquals(1, health.data().get("sources"));
-        assertEquals(1L, health.data().get("sourcesAvailable"));
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.premierleague.server.entity.Team;
 import com.premierleague.server.model.PlayerStat;
 import com.premierleague.server.provider.FootballDataProvider;
 import com.premierleague.server.provider.PlPhotoProvider;
+import com.premierleague.server.provider.PulseliveStandingsProvider;
 import com.premierleague.server.repository.MatchRepository;
 import com.premierleague.server.repository.PlayerRepository;
 import com.premierleague.server.repository.TeamRepository;
@@ -34,6 +35,7 @@ class TeamServiceTest {
     private PlayerRepository playerRepository;
     private MatchRepository matchRepository;
     private FootballDataProvider footballDataProvider;
+    private PulseliveStandingsProvider pulseliveStandingsProvider;
     private PlPhotoProvider plPhotoProvider;
     private PlayerService playerService;
     private SqlCacheService sqlCacheService;
@@ -45,6 +47,7 @@ class TeamServiceTest {
         playerRepository = mock(PlayerRepository.class);
         matchRepository = mock(MatchRepository.class);
         footballDataProvider = mock(FootballDataProvider.class);
+        pulseliveStandingsProvider = mock(PulseliveStandingsProvider.class);
         plPhotoProvider = mock(PlPhotoProvider.class);
         playerService = mock(PlayerService.class);
         sqlCacheService = mock(SqlCacheService.class);
@@ -53,6 +56,7 @@ class TeamServiceTest {
                 playerRepository,
                 matchRepository,
                 footballDataProvider,
+                pulseliveStandingsProvider,
                 plPhotoProvider,
                 playerService,
                 sqlCacheService
