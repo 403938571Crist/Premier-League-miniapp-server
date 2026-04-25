@@ -31,6 +31,17 @@ public class Zhibo8Provider implements NewsProvider {
     private static final String LIST_URL = "https://news.zhibo8.com/zuqiu/";
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
+    /**
+     * 垃圾/博彩类标题黑名单 —— 命中任一关键词直接跳过。
+     * 注意：必须在 PL_KEYWORDS 正向过滤之前执行！
+     */
+    private static final String[] BLOCKED_KEYWORDS = {
+        "彩经", "竞彩", "足彩", "彩票", "赔率",
+        "让球", "大小球", "欧赔", "亚盘", "胜平负",
+        "博彩", "赌球", "投注", "返水", "对阵分析预测",
+        "比分预测", "情报预测"
+    };
+
     // 英超相关关键词（用于标题过滤，避免逐篇抓详情）
     private static final String[] PL_KEYWORDS = {
         "英超", "Premier League", "premier league",
@@ -98,8 +109,8 @@ public class Zhibo8Provider implements NewsProvider {
                 String title = m.group(2).trim();
                 // 跳过导航链接
                 if (url.contains("more.htm") || title.length() < 5) continue;
-                // 标题过滤：只保留英超相关
-                if (isPremierLeagueTitle(title)) {
+                // 先过滤博彩/垃圾内容，再判断是否英超相关
+                if (!isSpamTitle(title) && isPremierLeagueTitle(title)) {
                     candidates.add(new String[]{url, title});
                 }
             }
@@ -254,6 +265,14 @@ public class Zhibo8Provider implements NewsProvider {
     private String extractTag(String html, String tag) {
         Matcher m = Pattern.compile("<" + tag + "[^>]*>([^<]+)</" + tag + ">", Pattern.CASE_INSENSITIVE).matcher(html);
         return m.find() ? m.group(1).trim() : "";
+    }
+
+    /** 命中任一博彩/垃圾关键词 → true（应丢弃） */
+    private boolean isSpamTitle(String title) {
+        for (String kw : BLOCKED_KEYWORDS) {
+            if (title.contains(kw)) return true;
+        }
+        return false;
     }
 
     private boolean isPremierLeagueTitle(String title) {

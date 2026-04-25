@@ -43,25 +43,13 @@ public class NewsService {
 
     private static final List<String> BLOCKED_SOURCE_TYPES = List.of("bilibili", "douyin");
     private static final Set<String> BLOCKED_NEWS_KEYWORDS = Set.of(
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            "betting",
-            "odds",
-            "handicap",
-            "tipster"
+            // 中文博彩/竞猜类垃圾内容
+            "彩经", "竞彩", "足彩", "彩票", "赔率",
+            "让球", "大小球", "欧赔", "亚盘", "胜平负",
+            "博彩", "赌球", "投注", "返水",
+            "比分预测", "情报预测",
+            // 英文博彩
+            "betting", "odds", "handicap", "tipster"
     );
     private static final int DEFAULT_PAGE = 1;
     private static final int DEFAULT_PAGE_SIZE = 10;
