@@ -1,0 +1,12 @@
+# Registers EnvironmentPostProcessor implementations so Spring Boot loads them
+# BEFORE the application context is built (i.e. before HikariCP tries to connect).
+#
+# Why here and not via @Component? EnvironmentPostProcessor runs so early that
+# component scanning hasn't happened yet, so Spring Boot won't pick it up as a bean.
+# It has to be declared via META-INF/spring.factories (or via spring.factories's
+# SpringFactoriesLoader mechanism) to be discovered.
+#
+# Note: Spring Boot 3.x uses the new META-INF/spring/*.imports format ONLY for
+# AutoConfiguration. EnvironmentPostProcessor still uses spring.factories.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.premierleague.server.config.ProdEnvValidator

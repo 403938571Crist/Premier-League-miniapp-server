@@ -10,6 +10,12 @@ RUN mvn clean package -DskipTests
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 
+# curl 用于容器 healthcheck（docker-compose.yml / CloudBase Run 探针都会走 curl /actuator/health）
+# eclipse-temurin:17-jre 基础镜像默认没有 curl/wget
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/target/*.jar app.jar
 
 EXPOSE 8080

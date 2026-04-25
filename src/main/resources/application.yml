@@ -5,7 +5,12 @@ server:
   shutdown: graceful
   tomcat:
     threads:
-      max: 50
+      # 30 并发处理线程 vs Hikari maximum-pool-size=15
+      # 比例 2:1 —— 允许短时间内部分请求走缓存/外部 HTTP 不抢 DB 连接，
+      # 但避免出现 50 个线程 pending 在 20s connection-timeout 上把服务拖死的雪崩
+      # （之前 50:10 的配比在 DB 稍慢时会立刻把 40 个线程卡死）
+      max: 30
+    # accept-count 保持 50：超出 30 in-flight 后还能排 50 个，总容量 80 再拒连接
     accept-count: 50
 
 spring:
@@ -20,7 +25,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       minimum-idle: 2
-      maximum-pool-size: 10
+      # 15 与 tomcat.threads.max=30 匹配（2:1）—— 见上方 server.tomcat 注释
+      maximum-pool-size: 15
       idle-timeout: 300000
       max-lifetime: 1200000
       connection-timeout: 20000
@@ -28,12 +34,29 @@ spring:
   # JPA 配置
   jpa:
     hibernate:
+      # 开发环境用 update 让 entity 字段改动自动同步到 schema
+      # 生产由 application-prod.yml 改成 validate，由 Flyway 掌管 schema 演进
       ddl-auto: update
     show-sql: false
+    # 关闭 OSIV：Hibernate session/连接的生命周期不再绑在整个 HTTP 请求上，
+    # 在 @Transactional 边界结束就归还连接。Hikari 利用率更高；
+    # 代价是 controller 里不能再访问 lazy 关联——本项目实体全部用 raw ID 外键，不受影响。
+    open-in-view: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQL8Dialect
         format_sql: true
+
+  # Flyway 数据库版本管理
+  # - baseline-on-migrate=true + baseline-version=1：已有 DB（本地 / 已部署实例）
+  #   会被标记为 V1 已应用，不会重跑 V1__baseline.sql；全新 DB 则从 V1 开始按序执行
+  # - 以后改表：新增 V2__xxx.sql、V3__xxx.sql，禁止改 V1
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 1
+    locations: classpath:db/migration
+    validate-on-migrate: true
 
   # 缓存配置（使用 Caffeine 本地缓存，无需 Redis）
   cache:
@@ -91,9 +114,36 @@ scraper:
 # 抓取源配置
 app:
   public-base-url: ${APP_PUBLIC_BASE_URL:http://localhost:8080}
+  # CORS 白名单（逗号分隔）。实现见 config/CorsConfig.java
+  # - 开发默认允许 localhost / 127.0.0.1 任意端口的浏览器调试
+  # - 生产环境由 application-prod.yml 覆盖为空列表，按需通过 APP_CORS_ALLOWED_ORIGINS env 注入
+  # - WeChat 小程序 wx.request 不走浏览器同源策略，不受此白名单影响
   cors:
-    allowed-origins:
-      - "*"
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*}
+
+  # /api/admin/** 接口的简易鉴权 token
+  # 未设置 → 所有 admin 请求一律 401（fail-closed，避免上线忘配导致匿名可调）
+  # 设置 → 请求需带 header `X-Admin-Token: <token>` 或 `Authorization: Bearer <token>`
+  admin:
+    api-token: ${ADMIN_API_TOKEN:}
+
+  # 同步健康阈值（SyncHealthIndicator 消费）
+  # - standings 每 5 分钟同步一次 → 超过 15 分钟没成功 = 上游挂了，DOWN
+  # - matches 实时比赛更频繁 → 10 分钟兜底
+  # - fetch_log 近 30 分钟 failed ≥ 5 条 → DOWN
+  # 全部 sync_logs 为空时（冷启动）一律 UP，不报错
+  sync-health:
+    staleness:
+      standings-minutes: 15
+      matches-minutes: 10
+    fetch-failure-threshold: 5
+    fetch-failure-window-minutes: 30
+
+  # 外部 dead-man-switch（Healthchecks.io 或兼容服务）
+  # 留空 → 调度器的 hourlyReport() 只打日志，不发 ping（开发/本地默认）
+  # 设置 → NewsFetchScheduler 每小时 GET 这个 URL。超过 grace period 没收到 ping，对方发告警
+  healthcheck:
+    ping-url: ${HEALTHCHECK_PING_URL:}
   
   # X (Twitter) API 配置
   x:

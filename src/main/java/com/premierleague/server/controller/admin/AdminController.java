@@ -51,23 +51,19 @@ public class AdminController {
     @PostMapping("/fetch/{frequency}")
     public ApiResponse<Map<String, Object>> triggerFetch(@PathVariable String frequency) {
         log.info("[Admin] Manual trigger fetch: frequency={}", frequency);
-        
+
         long startTime = System.currentTimeMillis();
-        
-        try {
-            newsFetchService.fetchByFrequency(frequency);
-            
-            Map<String, Object> result = new HashMap<>();
-            result.put("frequency", frequency);
-            result.put("triggeredAt", LocalDateTime.now().toString());
-            result.put("durationMs", System.currentTimeMillis() - startTime);
-            result.put("status", "success");
-            
-            return ApiResponse.ok(result);
-        } catch (Exception e) {
-            log.error("[Admin] Manual fetch failed", e);
-            return ApiResponse.error("Fetch failed: " + e.getMessage());
-        }
+        // 失败让 GlobalExceptionHandler 接住 —— 避免原始 e.getMessage() 经 ApiResponse 漏给客户端
+        // （抓取层的 IOException 里常带内网 URL 和 provider 返回的 headers/body 片段）
+        newsFetchService.fetchByFrequency(frequency);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("frequency", frequency);
+        result.put("triggeredAt", LocalDateTime.now().toString());
+        result.put("durationMs", System.currentTimeMillis() - startTime);
+        result.put("status", "success");
+
+        return ApiResponse.ok(result);
     }
     
     /**
@@ -77,40 +73,36 @@ public class AdminController {
     @PostMapping("/fetch/source/{sourceType}")
     public ApiResponse<Map<String, Object>> triggerFetchBySource(@PathVariable String sourceType) {
         log.info("[Admin] Manual trigger fetch by source: {}", sourceType);
-        
+
         NewsProvider provider = providers.stream()
                 .filter(p -> p.getSourceType().equals(sourceType))
                 .findFirst()
                 .orElse(null);
-        
+
+        // 这两个是"参数校验"错误，message 是我们自己写的常量，透传安全
         if (provider == null) {
-            return ApiResponse.error("Unknown source type: " + sourceType);
+            throw new IllegalArgumentException("Unknown source type: " + sourceType);
         }
         if (!provider.isEnabled()) {
-            return ApiResponse.error("Source disabled: " + sourceType);
+            throw new IllegalArgumentException("Source disabled: " + sourceType);
         }
-        
+
         long startTime = System.currentTimeMillis();
-        
-        try {
-            newsFetchService.fetchFromProvider(provider, provider.getFrequencyLevel());
+        // 抓取失败让 GlobalExceptionHandler 接住（同 triggerFetch 注释）
+        newsFetchService.fetchFromProvider(provider, provider.getFrequencyLevel());
 
-            // 抓取成功后立刻清 newsList 缓存，保证 /api/news 能看到新数据
-            var cache = cacheManager.getCache("newsList");
-            if (cache != null) cache.clear();
+        // 抓取成功后立刻清 newsList 缓存，保证 /api/news 能看到新数据
+        var cache = cacheManager.getCache("newsList");
+        if (cache != null) cache.clear();
 
-            Map<String, Object> result = new HashMap<>();
-            result.put("sourceType", sourceType);
-            result.put("sourceName", provider.getSourceName());
-            result.put("triggeredAt", LocalDateTime.now().toString());
-            result.put("durationMs", System.currentTimeMillis() - startTime);
-            result.put("status", "success");
+        Map<String, Object> result = new HashMap<>();
+        result.put("sourceType", sourceType);
+        result.put("sourceName", provider.getSourceName());
+        result.put("triggeredAt", LocalDateTime.now().toString());
+        result.put("durationMs", System.currentTimeMillis() - startTime);
+        result.put("status", "success");
 
-            return ApiResponse.ok(result);
-        } catch (Exception e) {
-            log.error("[Admin] Manual fetch failed", e);
-            return ApiResponse.error("Fetch failed: " + e.getMessage());
-        }
+        return ApiResponse.ok(result);
     }
     
     /**
@@ -261,10 +253,12 @@ public class AdminController {
     /** 从懂球帝 URL 中提取文章 ID */
     @PostMapping("/backfill/players")
     public ApiResponse<Map<String, Object>> backfillPlayers(
-            @RequestParam(defaultValue = "150") int limit) {
-        log.info("[Admin] Starting player profile backfill, limit={}", limit);
-        PlayerProfileBackfillService.BackfillResult result =
-                playerProfileBackfillService.backfillMissingProfiles(limit);
+            @RequestParam(defaultValue = "150") int limit,
+            @RequestParam(required = false) List<Long> teamIds) {
+        log.info("[Admin] Starting player profile backfill, limit={}, teamIds={}", limit, teamIds);
+        PlayerProfileBackfillService.BackfillResult result = (teamIds == null || teamIds.isEmpty())
+                ? playerProfileBackfillService.backfillMissingProfiles(limit)
+                : playerProfileBackfillService.backfillMissingProfiles(limit, teamIds);
 
         var squadCache = cacheManager.getCache("teamSquad");
         if (squadCache != null) {
@@ -272,6 +266,7 @@ public class AdminController {
         }
 
         Map<String, Object> payload = new HashMap<>();
+        payload.put("teamIds", teamIds);
         payload.put("scanned", result.scanned());
         payload.put("updated", result.updatedPlayers());
         payload.put("chineseNamesUpdated", result.chineseNamesUpdated());
@@ -316,6 +311,26 @@ public class AdminController {
         payload.put("createdPlayers", result.createdPlayers());
         payload.put("updatedPlayers", result.updatedPlayers());
         payload.put("photosUpdated", result.photosUpdated());
+        return ApiResponse.ok(payload);
+    }
+
+    /**
+     * 扫 FORCE_WIKIPEDIA_REFRESH 名单里的球员，强制刷新 photo_url。
+     * 专治：被租借到非英超俱乐部（例：Rashford→Barcelona、Hojlund→Napoli）的球员，
+     * Pulselive Man Utd squad 端已经不再返回他们，squad sync 摸不到，photo_url 永久卡在旧 CDN URL。
+     * POST /api/admin/refresh-transfer-photos
+     */
+    @PostMapping("/refresh-transfer-photos")
+    public ApiResponse<Map<String, Object>> refreshTransferPhotos() {
+        log.info("[Admin] Refresh transfer photos");
+        PlayerSquadBackfillService.TransferPhotoRefreshResult result =
+                playerSquadBackfillService.refreshTransferPhotos();
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("watchlistSize", result.watchlistSize());
+        payload.put("scannedRows", result.scannedRows());
+        payload.put("updatedRows", result.updatedRows());
+        payload.put("updatedIdentifiers", result.updatedIdentifiers());
         return ApiResponse.ok(payload);
     }
 
@@ -365,23 +380,8 @@ public class AdminController {
         return ApiResponse.ok(r);
     }
 
-    /**
-     * 健康检查
-     * GET /api/admin/health
-     */
-    @GetMapping("/health")
-    public ApiResponse<Map<String, Object>> healthCheck() {
-        List<NewsProvider> enabledProviders = providers.stream()
-                .filter(NewsProvider::isEnabled)
-                .toList();
-        Map<String, Object> health = new HashMap<>();
-        health.put("status", "UP");
-        health.put("timestamp", LocalDateTime.now().toString());
-        health.put("sources", enabledProviders.size());
-        health.put("sourcesAvailable", enabledProviders.stream().filter(NewsProvider::isAvailable).count());
-        
-        return ApiResponse.ok(health);
-    }
+    // /api/admin/health 已移除 —— 和 /actuator/health 功能重叠
+    // 需要看 news provider 状态请用 GET /api/admin/sources
 
     private String[] clearNewsCaches() {
         String[] caches = {"newsList", "newsDetail", "transferNews", "socialPlayers"};

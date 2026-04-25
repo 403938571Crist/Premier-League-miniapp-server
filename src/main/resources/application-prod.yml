@@ -14,6 +14,21 @@ spring:
   cache:
     type: simple
 
+# 生产 CORS 默认锁死为空（无浏览器跨源请求能过）
+# 若实际需要开放 H5 / web 管理后台，通过环境变量注入：
+#   APP_CORS_ALLOWED_ORIGINS=https://admin.example.com,https://*.yourdomain.com
+# WeChat 小程序 wx.request 不走浏览器同源策略，因此此处置空对小程序流量无影响
+app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:}
+
+# Actuator：生产环境不向匿名调用方泄露健康详情（DB 状态 / 组件名等）
+# CloudBase Run liveness/readiness 探针只需要 /actuator/health 的 200/503，不需要 details
+management:
+  endpoint:
+    health:
+      show-details: never
+
 # 日志配置（生产环境保持简洁，减少 CloudBase Run 日志开销）
 logging:
   level:

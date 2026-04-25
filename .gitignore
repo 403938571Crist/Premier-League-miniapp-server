@@ -10,3 +10,8 @@ Thumbs.db
 /*.md
 !/README.md
 /.claude/
+
+# 本地构建/调试产物，不应提交
+.m2/
+temp-settings*.xml
+tmp_*

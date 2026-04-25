@@ -52,6 +52,16 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- Flyway DB migration (替代 ddl-auto=update 的脆弱演进) -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
         
         <!-- Cache (Caffeine) - 替代 Redis，实现零 Redis 依赖部署 -->
         <dependency>

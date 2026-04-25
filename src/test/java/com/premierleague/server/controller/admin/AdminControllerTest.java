@@ -77,6 +77,34 @@ class AdminControllerTest {
     }
 
     @Test
+    void backfillPlayersAcceptsOptionalTeamScope() {
+        PlayerProfileBackfillService playerProfileBackfillService = mock(PlayerProfileBackfillService.class);
+        List<Long> teamIds = List.of(12L, 13L, 14L);
+        when(playerProfileBackfillService.backfillMissingProfiles(60, teamIds))
+                .thenReturn(new PlayerProfileBackfillService.BackfillResult(46, 9, 0, 9));
+
+        AdminController controller = new AdminController(
+                mock(NewsFetchService.class),
+                playerProfileBackfillService,
+                mock(PlayerSquadBackfillService.class),
+                mock(PlayerSocialBackfillService.class),
+                mock(FetchLogRepository.class),
+                mock(NewsRepository.class),
+                mock(DongqiudiProvider.class),
+                List.of(),
+                new ConcurrentMapCacheManager("teamSquad", "playerDetail", "playerByApiId")
+        );
+
+        ApiResponse<Map<String, Object>> response = controller.backfillPlayers(60, teamIds);
+
+        assertEquals(teamIds, response.data().get("teamIds"));
+        assertEquals(46, response.data().get("scanned"));
+        assertEquals(9, response.data().get("updated"));
+        assertEquals(0, response.data().get("chineseNamesUpdated"));
+        assertEquals(9, response.data().get("photosUpdated"));
+    }
+
+    @Test
     void backfillPlayerSquadsReturnsServiceCounters() {
         PlayerSquadBackfillService playerSquadBackfillService = mock(PlayerSquadBackfillService.class);
         when(playerSquadBackfillService.backfillOfficialSquads(eq(List.of(5L, 6L))))

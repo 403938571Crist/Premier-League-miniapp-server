@@ -13,10 +13,20 @@ services:
       - DB_URL=jdbc:mysql://host.docker.internal:3306/premierleague?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
       - DB_USERNAME=root
       - DB_PASSWORD=${DB_PASSWORD:-}
+      # prod profile 要求：缺失会让 ProdEnvValidator 直接失败启动
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:-}
+      - APP_CORS_ALLOWED_ORIGINS=${APP_CORS_ALLOWED_ORIGINS:-}
       - FOOTBALL_DATA_TOKEN=${FOOTBALL_DATA_TOKEN:-}
       - X_BEARER_TOKEN=${X_BEARER_TOKEN:-}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      # 用 /actuator/health/liveness（不是 /actuator/health）有意而为：
+      #  - /actuator/health 聚合了所有 indicator，包括我们的 SyncHealthIndicator
+      #    （当 football-data.org 挂了 15 分钟它会返回 DOWN）。
+      #    让容器编排把它当作存活探针 → 上游抖动一下 → 容器被 kill 重启 → 雪崩。
+      #  - /actuator/health/liveness 只反映 Spring LivenessState（JVM 活着，事件循环没锁死）。
+      #    容器只有在"确实该重启"时才被重启；上游 API 问题由 SyncHealthIndicator
+      #    在 /actuator/health 上暴露给监控面板 / Healthchecks.io 看。
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health/liveness"]
       interval: 30s
       timeout: 10s
       retries: 3
